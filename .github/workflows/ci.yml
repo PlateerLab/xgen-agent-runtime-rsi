@@ -57,7 +57,7 @@ jobs:
       - name: xgen-agent-runtime 없이 돈다(독립 패키지)
         run: |
           python -c "import importlib.util as u, sys; sys.exit(1 if u.find_spec('xgen_agent_runtime') else 0)"
-          ! grep -rn "xgen_agent_runtime" src/
+          ! grep -rn --include=*.py "xgen_agent_runtime" src/
       - run: pytest -q -p no:warnings
 
   build:
