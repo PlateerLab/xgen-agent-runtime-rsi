@@ -1,0 +1,58 @@
+{
+ "id": "synth-weekly-2",
+ "prompt": "reports 폴더의 팀별 주간 보고를 모두 읽고 summary.md 를 작성하세요. '## 요약' 절에는 예산 집행률이 가장 높은 팀과 그 비율(예: 개발 87%)을 한 줄로, '## 위험' 절에는 위험이 있는 팀마다 '팀명: 위험' 한 줄씩 적으세요(위험이 '없음'인 팀은 빼세요).",
+ "checks": [
+  {
+   "kind": "file_exists",
+   "path": "summary.md",
+   "required": true
+  },
+  {
+   "kind": "file_contains",
+   "path": "summary.md",
+   "regex": "^#+\\s*요약",
+   "format": true,
+   "name": "has-summary-heading"
+  },
+  {
+   "kind": "file_contains",
+   "path": "summary.md",
+   "regex": "^#+\\s*위험",
+   "format": true,
+   "name": "has-risk-heading"
+  },
+  {
+   "kind": "file_contains",
+   "path": "summary.md",
+   "text": "운영",
+   "name": "mentions-top-team"
+  },
+  {
+   "kind": "file_contains",
+   "path": "summary.md",
+   "regex": "운영[^\\n]*88%",
+   "name": "top-team-rate"
+  },
+  {
+   "kind": "file_contains",
+   "path": "summary.md",
+   "regex": "운영[^\\n]*예산 초과",
+   "name": "risk-운영"
+  },
+  {
+   "kind": "file_contains",
+   "path": "summary.md",
+   "regex": "재무[^\\n]*예산 초과",
+   "name": "risk-재무"
+  }
+ ],
+ "files": {
+  "reports/영업.md": "# 영업팀 주간 보고\n\n- 예산 집행률: 58%\n- 주요 위험: 없음\n- 다음 주 계획: 정기 점검\n",
+  "reports/개발.md": "# 개발팀 주간 보고\n\n- 예산 집행률: 68%\n- 주요 위험: 없음\n- 다음 주 계획: 정기 점검\n",
+  "reports/운영.md": "# 운영팀 주간 보고\n\n- 예산 집행률: 88%\n- 주요 위험: 예산 초과\n- 다음 주 계획: 정기 점검\n",
+  "reports/재무.md": "# 재무팀 주간 보고\n\n- 예산 집행률: 37%\n- 주요 위험: 예산 초과\n- 다음 주 계획: 정기 점검\n"
+ },
+ "tags": [
+  "synthesis"
+ ]
+}

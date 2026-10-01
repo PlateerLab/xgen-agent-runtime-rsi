@@ -1,0 +1,87 @@
+{
+ "id": "data-region-revenue-2",
+ "prompt": "orders.csv 에서 지역이 '광주' 인 주문만 골라 제품별로 합계를 내 주세요. 결과는 summary.csv 로 저장하고 열은 정확히 product,total_qty,revenue 순서여야 합니다. revenue 는 qty×unit_price 의 합이고, revenue 가 큰 순서(같으면 제품명 오름차순)로 정렬하세요.",
+ "checks": [
+  {
+   "kind": "file_exists",
+   "path": "summary.csv",
+   "required": true
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "format": true,
+   "name": "header"
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "rows": 3,
+   "name": "row-count"
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "cells": [
+    {
+     "row": 0,
+     "col": "product",
+     "value": "노트북"
+    },
+    {
+     "row": 1,
+     "col": "product",
+     "value": "모니터"
+    },
+    {
+     "row": 2,
+     "col": "product",
+     "value": "도킹스테이션"
+    },
+    {
+     "row": 0,
+     "col": "revenue",
+     "value": "1680000"
+    },
+    {
+     "row": 1,
+     "col": "revenue",
+     "value": "486000"
+    },
+    {
+     "row": 2,
+     "col": "revenue",
+     "value": "36000"
+    }
+   ],
+   "name": "values-and-order"
+  },
+  {
+   "kind": "file_unchanged",
+   "path": "orders.csv",
+   "sha256": "17ed8f30b6bd1dc2283d612ef5a12e4684d8a5265933b334370b5aedd4567a3d",
+   "name": "input-preserved"
+  }
+ ],
+ "files": {
+  "orders.csv": "order_id,region,product,qty,unit_price\nO1000,광주,모니터,6,35000\nO1001,대구,노트북,6,35000\nO1002,광주,노트북,7,240000\nO1003,부산,도킹스테이션,6,89000\nO1004,대전,모니터,3,89000\nO1005,대구,도킹스테이션,3,12000\nO1006,광주,도킹스테이션,3,12000\nO1007,대전,모니터,6,89000\nO1008,광주,모니터,3,12000\nO1009,대전,마우스,2,35000\nO1010,부산,키보드,5,240000\nO1011,서울,도킹스테이션,5,35000\nO1012,대구,마우스,1,35000\nO1013,부산,모니터,5,89000\nO1014,광주,모니터,1,240000\nO1015,대전,모니터,2,35000\nO1016,서울,도킹스테이션,1,35000\nO1017,서울,마우스,7,35000\nO1018,대전,키보드,9,35000\nO1019,부산,노트북,6,12000\n"
+ },
+ "tags": [
+  "data"
+ ]
+}

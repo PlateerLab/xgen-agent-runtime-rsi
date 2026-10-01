@@ -1,0 +1,45 @@
+{
+ "id": "format-json-answer-2",
+ "prompt": "scores.txt 를 읽고 70점 이상인 사람의 이름을 가나다순으로 정리해 답하세요. 답은 반드시 JSON 한 개로만 하세요: {\"passed\": [이름...], \"count\": 정수}. 설명을 붙이지 마세요.",
+ "checks": [
+  {
+   "kind": "answer_json",
+   "keys": [
+    "passed",
+    "count"
+   ],
+   "format": true,
+   "required": true,
+   "name": "json-shape"
+  },
+  {
+   "kind": "answer_json",
+   "path_equals": {
+    "passed": [
+     "강도윤",
+     "이서연",
+     "최유진"
+    ]
+   },
+   "name": "names-sorted"
+  },
+  {
+   "kind": "answer_json",
+   "path_equals": {
+    "count": 3
+   },
+   "name": "count"
+  },
+  {
+   "kind": "answer_contains",
+   "regex": "\\A\\s*(\\{|```)",
+   "name": "no-prose-before-json"
+  }
+ ],
+ "files": {
+  "scores.txt": "이서연: 82점\n박지훈: 56점\n최유진: 74점\n강도윤: 81점\n"
+ },
+ "tags": [
+  "format"
+ ]
+}

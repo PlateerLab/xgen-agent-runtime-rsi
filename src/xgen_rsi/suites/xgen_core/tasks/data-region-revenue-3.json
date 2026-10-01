@@ -1,0 +1,87 @@
+{
+ "id": "data-region-revenue-3",
+ "prompt": "orders.csv 에서 지역이 '대구' 인 주문만 골라 제품별로 합계를 내 주세요. 결과는 summary.csv 로 저장하고 열은 정확히 product,total_qty,revenue 순서여야 합니다. revenue 는 qty×unit_price 의 합이고, revenue 가 큰 순서(같으면 제품명 오름차순)로 정렬하세요.",
+ "checks": [
+  {
+   "kind": "file_exists",
+   "path": "summary.csv",
+   "required": true
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "format": true,
+   "name": "header"
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "rows": 3,
+   "name": "row-count"
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "cells": [
+    {
+     "row": 0,
+     "col": "product",
+     "value": "모니터"
+    },
+    {
+     "row": 1,
+     "col": "product",
+     "value": "도킹스테이션"
+    },
+    {
+     "row": 2,
+     "col": "product",
+     "value": "키보드"
+    },
+    {
+     "row": 0,
+     "col": "revenue",
+     "value": "1680000"
+    },
+    {
+     "row": 1,
+     "col": "revenue",
+     "value": "712000"
+    },
+    {
+     "row": 2,
+     "col": "revenue",
+     "value": "712000"
+    }
+   ],
+   "name": "values-and-order"
+  },
+  {
+   "kind": "file_unchanged",
+   "path": "orders.csv",
+   "sha256": "67e48b3e6a133e17adf0029b9096ead0b1601a67ce1d508057034f4ee25c9ac8",
+   "name": "input-preserved"
+  }
+ ],
+ "files": {
+  "orders.csv": "order_id,region,product,qty,unit_price\nO1000,서울,모니터,9,12000\nO1001,대구,모니터,7,240000\nO1002,광주,모니터,5,89000\nO1003,광주,마우스,5,12000\nO1004,서울,도킹스테이션,6,240000\nO1005,서울,키보드,7,35000\nO1006,서울,키보드,5,12000\nO1007,광주,노트북,1,35000\nO1008,광주,도킹스테이션,8,35000\nO1009,대전,노트북,6,89000\nO1010,부산,마우스,2,12000\nO1011,대구,도킹스테이션,2,89000\nO1012,부산,노트북,6,240000\nO1013,서울,키보드,5,240000\nO1014,대전,모니터,5,35000\nO1015,서울,마우스,6,35000\nO1016,광주,모니터,4,12000\nO1017,대구,도킹스테이션,4,89000\nO1018,대전,키보드,6,12000\nO1019,대구,도킹스테이션,2,89000\nO1020,대구,키보드,8,89000\n"
+ },
+ "tags": [
+  "data"
+ ]
+}

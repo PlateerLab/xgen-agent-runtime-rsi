@@ -1,0 +1,47 @@
+{
+ "id": "edit-config-3",
+ "prompt": "config.json 에서 service.port 를 8543 로, features.beta_ui 를 true 로 바꾸세요. 다른 값은 그대로 두고, notes.txt 는 건드리지 마세요.",
+ "checks": [
+  {
+   "kind": "file_json",
+   "path": "config.json",
+   "path_equals": {
+    "service.port": 8543
+   },
+   "format": true,
+   "required": true,
+   "name": "port"
+  },
+  {
+   "kind": "file_json",
+   "path": "config.json",
+   "path_equals": {
+    "features.beta_ui": true
+   },
+   "name": "beta-flag"
+  },
+  {
+   "kind": "file_json",
+   "path": "config.json",
+   "path_equals": {
+    "service.workers": 5,
+    "database.pool": 10,
+    "features.audit": true
+   },
+   "name": "others-kept"
+  },
+  {
+   "kind": "file_unchanged",
+   "path": "notes.txt",
+   "sha256": "823993c902f8139f03c02ed921ab87cdcf29bf69575b09acd4e94e9b51703a9f",
+   "name": "notes-untouched"
+  }
+ ],
+ "files": {
+  "config.json": "{\n  \"service\": {\n    \"name\": \"billing-api\",\n    \"port\": 8443,\n    \"workers\": 5\n  },\n  \"database\": {\n    \"host\": \"db.internal\",\n    \"pool\": 10\n  },\n  \"features\": {\n    \"audit\": true,\n    \"beta_ui\": false\n  }\n}\n",
+  "notes.txt": "운영 메모: 이 파일은 수정하지 마세요.\n"
+ },
+ "tags": [
+  "edit"
+ ]
+}

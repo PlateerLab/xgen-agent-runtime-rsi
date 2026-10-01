@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xgen-agent-runtime-rsi"
+version = "0.1.0"
+description = "XGEN RSI harness — a swap-in agent harness that evolves itself with RRSI (regularized harness evolution) and Dream-RSI (replay-based exploration policy improvement)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+authors = [{ name = "CocoRoF", email = "cocorof@users.noreply.github.com" }]
+keywords = ["agent", "harness", "rsi", "rrsi", "dream-rsi", "self-improvement", "llm", "xgen"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+# 계약 모듈(HostServices·도구 ABI·메모리 프로토콜·cancel_context)과 공급자 계층(llm_client)은
+# xgen-agent-runtime 이 소유한다. 이 패키지는 그 위에서 실행 코어만 새로 짓는다.
+# 이름으로만 요구한다 — 소비자(xgen-workflow)가 런타임 wheel 을 URL 로 고정해 두므로 버전이 둘로 갈리지 않는다.
+dependencies = [
+    "xgen-agent-runtime>=4.80.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "hypothesis>=6.100",
+    "ruff>=0.4.0",
+    "mypy>=1.10",
+    # 수식 차분 테스트의 기준(공식 RRSI 구현, Apache-2.0). 실행 코드는 import 하지 않는다.
+    "rrsi @ git+https://github.com/google-research/rrsi.git@be50316e1db05914068a973f322770ef08ed7ba1",
+]
+
+[project.scripts]
+rsi = "xgen_rsi.cli:main"
+
+[project.urls]
+Repository = "https://github.com/PlateerLab/xgen-agent-runtime-rsi"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/xgen_rsi"]
+artifacts = ["src/xgen_rsi/harnesses/**/*.md", "src/xgen_rsi/harnesses/**/*.json", "src/xgen_rsi/evolve/constitution/**/*.md", "src/xgen_rsi/suites/**/*.json"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/xgen_rsi/rsi_math"]
+strict = true

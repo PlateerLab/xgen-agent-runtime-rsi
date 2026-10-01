@@ -1,0 +1,63 @@
+{
+ "id": "extract-po-3",
+ "prompt": "po.txt 를 읽고 다음 키를 가진 JSON 을 po.json 으로 저장하세요: po_number(문자열), vendor(문자열), amount_krw(정수), due_date(YYYY-MM-DD 문자열), items(문자열 배열, 문서 순서대로).",
+ "checks": [
+  {
+   "kind": "file_json",
+   "path": "po.json",
+   "keys": [
+    "po_number",
+    "vendor",
+    "amount_krw",
+    "due_date",
+    "items"
+   ],
+   "format": true,
+   "required": true,
+   "name": "schema"
+  },
+  {
+   "kind": "file_json",
+   "path": "po.json",
+   "path_equals": {
+    "po_number": "PO-2026-153",
+    "vendor": "(주)한빛솔루션"
+   },
+   "name": "ids"
+  },
+  {
+   "kind": "file_json",
+   "path": "po.json",
+   "path_equals": {
+    "amount_krw": 6310000
+   },
+   "name": "amount-integer"
+  },
+  {
+   "kind": "file_json",
+   "path": "po.json",
+   "path_equals": {
+    "due_date": "2026-11-08"
+   },
+   "name": "due-date"
+  },
+  {
+   "kind": "file_json",
+   "path": "po.json",
+   "path_equals": {
+    "items": [
+     "교육 지원",
+     "서버 유지보수",
+     "라이선스 갱신"
+    ]
+   },
+   "name": "items-in-order"
+  }
+ ],
+ "files": {
+  "po.txt": "견적 및 발주 확인서\n\n발주번호: PO-2026-153\n공급사: (주)한빛솔루션\n\n본 문서는 아래 항목에 대한 발주를 확인합니다.\n- 교육 지원\n- 서버 유지보수\n- 라이선스 갱신\n\n총 금액(부가세 포함): 6,310,000원\n납기일: 2026-11-08\n\n담당자 확인 후 회신 바랍니다.\n"
+ },
+ "tags": [
+  "extract"
+ ]
+}

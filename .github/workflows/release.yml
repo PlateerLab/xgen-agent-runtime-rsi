@@ -1,0 +1,37 @@
+name: Release wheel
+
+# PyPI 가 아니라 GitHub Release 자산으로 wheel 을 낸다(xgen-agent-runtime 과 같은 방식).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 태그와 버전이 같은지 확인
+        run: |
+          V=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
+            echo "태그 ${GITHUB_REF_NAME} 와 pyproject 버전 v$V 가 다릅니다"; exit 1
+          fi
+      - run: pip install build
+      - run: python -m build
+      - name: 설치되고 import 되는지 확인
+        run: |
+          pip install "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl" \
+                      "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl" dist/*.whl
+          python -c "from xgen_rsi import GenyRSI; import xgen_rsi; print(xgen_rsi.__version__)"
+          rsi harness validate
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

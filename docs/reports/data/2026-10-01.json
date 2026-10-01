@@ -1,0 +1,937 @@
+{
+ "engine_comparison": {
+  "xgen-core": {
+   "gpt6sol/geny-rsi/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.9189,
+    "S_task_se": 0.0296,
+    "usage_tokens_mean": 3270,
+    "duration_s_mean": 4.98,
+    "per_category": {
+     "compute-expense": 1.0,
+     "data-region-revenue": 1.0,
+     "edit-config": 1.0,
+     "extract-po": 1.0,
+     "format-json-answer": 1.0,
+     "minutes-actions": 0.571,
+     "recovery-missing-file": 1.0,
+     "synth-weekly": 1.0
+    }
+   },
+   "gpt6sol/geny-rsi/heldout": {
+    "trials": 16,
+    "missing": 0,
+    "S": 0.9143,
+    "S_task_se": 0.0536,
+    "usage_tokens_mean": 3477,
+    "duration_s_mean": 5.53,
+    "per_category": {
+     "compute-expense": 1.0,
+     "data-region-revenue": 1.0,
+     "edit-config": 1.0,
+     "extract-po": 1.0,
+     "format-json-answer": 1.0,
+     "minutes-actions": 0.571,
+     "recovery-missing-file": 1.0,
+     "synth-weekly": 1.0
+    }
+   },
+   "gpt6sol/geny/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.9189,
+    "S_task_se": 0.0296,
+    "usage_tokens_mean": 3224,
+    "duration_s_mean": 5.28,
+    "per_category": {
+     "compute-expense": 1.0,
+     "data-region-revenue": 1.0,
+     "edit-config": 1.0,
+     "extract-po": 1.0,
+     "format-json-answer": 1.0,
+     "minutes-actions": 0.571,
+     "recovery-missing-file": 1.0,
+     "synth-weekly": 1.0
+    }
+   },
+   "gpt6sol/geny/heldout": {
+    "trials": 16,
+    "missing": 0,
+    "S": 0.9143,
+    "S_task_se": 0.0536,
+    "usage_tokens_mean": 3663,
+    "duration_s_mean": 5.62,
+    "per_category": {
+     "compute-expense": 1.0,
+     "data-region-revenue": 1.0,
+     "edit-config": 1.0,
+     "extract-po": 1.0,
+     "format-json-answer": 1.0,
+     "minutes-actions": 0.571,
+     "recovery-missing-file": 1.0,
+     "synth-weekly": 1.0
+    }
+   },
+   "sonnet5/geny-rsi/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 1.0,
+    "S_task_se": 0.0,
+    "usage_tokens_mean": 7606,
+    "duration_s_mean": 6.74,
+    "per_category": {
+     "compute-expense": 1.0,
+     "data-region-revenue": 1.0,
+     "edit-config": 1.0,
+     "extract-po": 1.0,
+     "format-json-answer": 1.0,
+     "minutes-actions": 1.0,
+     "recovery-missing-file": 1.0,
+     "synth-weekly": 1.0
+    }
+   },
+   "sonnet5/geny-rsi/heldout": {
+    "trials": 16,
+    "missing": 0,
+    "S": 1.0,
+    "S_task_se": 0.0,
+    "usage_tokens_mean": 7467,
+    "duration_s_mean": 6.45,
+    "per_category": {
+     "compute-expense": 1.0,
+     "data-region-revenue": 1.0,
+     "edit-config": 1.0,
+     "extract-po": 1.0,
+     "format-json-answer": 1.0,
+     "minutes-actions": 1.0,
+     "recovery-missing-file": 1.0,
+     "synth-weekly": 1.0
+    }
+   },
+   "sonnet5/geny/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 1.0,
+    "S_task_se": 0.0,
+    "usage_tokens_mean": 6807,
+    "duration_s_mean": 6.53,
+    "per_category": {
+     "compute-expense": 1.0,
+     "data-region-revenue": 1.0,
+     "edit-config": 1.0,
+     "extract-po": 1.0,
+     "format-json-answer": 1.0,
+     "minutes-actions": 1.0,
+     "recovery-missing-file": 1.0,
+     "synth-weekly": 1.0
+    }
+   },
+   "sonnet5/geny/heldout": {
+    "trials": 16,
+    "missing": 0,
+    "S": 1.0,
+    "S_task_se": 0.0,
+    "usage_tokens_mean": 7281,
+    "duration_s_mean": 7.16,
+    "per_category": {
+     "compute-expense": 1.0,
+     "data-region-revenue": 1.0,
+     "edit-config": 1.0,
+     "extract-po": 1.0,
+     "format-json-answer": 1.0,
+     "minutes-actions": 1.0,
+     "recovery-missing-file": 1.0,
+     "synth-weekly": 1.0
+    }
+   }
+  },
+  "xgen-hard": {
+   "gpt6sol/geny-rsi/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.9924,
+    "S_task_se": 0.007,
+    "usage_tokens_mean": 9113,
+    "duration_s_mean": 11.78,
+    "per_category": {
+     "calendar": 1.0,
+     "multi-edit": 1.0,
+     "pipeline": 0.905,
+     "policy-qa": 1.0,
+     "reconcile": 1.0,
+     "recovery-hard": 1.0,
+     "schema-out": 1.0,
+     "spec-aggregate": 1.0
+    }
+   },
+   "gpt6sol/geny-rsi/heldout": {
+    "trials": 32,
+    "missing": 0,
+    "S": 0.9972,
+    "S_task_se": 0.0045,
+    "usage_tokens_mean": 9309,
+    "duration_s_mean": 13.43,
+    "per_category": {
+     "calendar": 1.0,
+     "multi-edit": 1.0,
+     "pipeline": 0.964,
+     "policy-qa": 1.0,
+     "reconcile": 1.0,
+     "recovery-hard": 1.0,
+     "schema-out": 1.0,
+     "spec-aggregate": 1.0
+    }
+   },
+   "gpt6sol/geny/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.9886,
+    "S_task_se": 0.0107,
+    "usage_tokens_mean": 8721,
+    "duration_s_mean": 12.26,
+    "per_category": {
+     "calendar": 1.0,
+     "multi-edit": 1.0,
+     "pipeline": 0.857,
+     "policy-qa": 1.0,
+     "reconcile": 1.0,
+     "recovery-hard": 1.0,
+     "schema-out": 1.0,
+     "spec-aggregate": 1.0
+    }
+   },
+   "gpt6sol/geny/heldout": {
+    "trials": 32,
+    "missing": 0,
+    "S": 0.9858,
+    "S_task_se": 0.0106,
+    "usage_tokens_mean": 9479,
+    "duration_s_mean": 12.52,
+    "per_category": {
+     "calendar": 1.0,
+     "multi-edit": 1.0,
+     "pipeline": 0.929,
+     "policy-qa": 1.0,
+     "reconcile": 1.0,
+     "recovery-hard": 1.0,
+     "schema-out": 1.0,
+     "spec-aggregate": 0.942
+    }
+   },
+   "sonnet5/geny-rsi/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.9053,
+    "S_task_se": 0.0435,
+    "usage_tokens_mean": 20498,
+    "duration_s_mean": 46.07,
+    "per_category": {
+     "calendar": 1.0,
+     "multi-edit": 1.0,
+     "pipeline": 0.762,
+     "policy-qa": 0.933,
+     "reconcile": 1.0,
+     "recovery-hard": 1.0,
+     "schema-out": 1.0,
+     "spec-aggregate": 0.538
+    }
+   },
+   "sonnet5/geny-rsi/heldout": {
+    "trials": 32,
+    "missing": 0,
+    "S": 0.8636,
+    "S_task_se": 0.0872,
+    "usage_tokens_mean": 20646,
+    "duration_s_mean": 55.42,
+    "per_category": {
+     "calendar": 1.0,
+     "multi-edit": 1.0,
+     "pipeline": 0.714,
+     "policy-qa": 0.9,
+     "reconcile": 1.0,
+     "recovery-hard": 1.0,
+     "schema-out": 1.0,
+     "spec-aggregate": 0.308
+    }
+   },
+   "sonnet5/geny/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.8996,
+    "S_task_se": 0.0343,
+    "usage_tokens_mean": 19914,
+    "duration_s_mean": 43.82,
+    "per_category": {
+     "calendar": 1.0,
+     "multi-edit": 1.0,
+     "pipeline": 0.714,
+     "policy-qa": 0.917,
+     "reconcile": 1.0,
+     "recovery-hard": 1.0,
+     "schema-out": 1.0,
+     "spec-aggregate": 0.538
+    }
+   },
+   "sonnet5/geny/heldout": {
+    "trials": 32,
+    "missing": 0,
+    "S": 0.8125,
+    "S_task_se": 0.1192,
+    "usage_tokens_mean": 17979,
+    "duration_s_mean": 51.78,
+    "per_category": {
+     "calendar": 1.0,
+     "multi-edit": 1.0,
+     "pipeline": 0.536,
+     "policy-qa": 0.9,
+     "reconcile": 1.0,
+     "recovery-hard": 1.0,
+     "schema-out": 0.986,
+     "spec-aggregate": 0.077
+    }
+   }
+  }
+ },
+ "replay_equivalence": {
+  "gpt6sol": {
+   "tasks": 32,
+   "calls": 77,
+   "identical_calls": 77,
+   "answers_equal": 32,
+   "usage_equal": 32,
+   "reward_equal": 32
+  },
+  "sonnet5": {
+   "tasks": 32,
+   "calls": 81,
+   "identical_calls": 81,
+   "answers_equal": 32,
+   "usage_equal": 32,
+   "reward_equal": 32
+  }
+ },
+ "evolution": {
+  "evo-gpt6sol": {
+   "trajectory": [
+    {
+     "t": 0,
+     "S": 0.9924242424242424,
+     "C": 9112.9375,
+     "commit": "8e1d4d265ade38c66c440be5288acd268eb30c4c",
+     "job": "base",
+     "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+    },
+    {
+     "t": 1,
+     "S": 1.0,
+     "C": 8967.520833333334,
+     "commit": "a8bc867d428635edc295e8caaac8fcb3c8a5002c",
+     "job": "r0A",
+     "harness_version": "sha256:93e949f0676045b0076058f7409729277c86df3a453c762e34afc16d1c8d15e4"
+    },
+    {
+     "t": 2,
+     "S": 1.0,
+     "C": 8967.520833333334,
+     "commit": "a8bc867d428635edc295e8caaac8fcb3c8a5002c",
+     "job": "r0A",
+     "harness_version": "sha256:93e949f0676045b0076058f7409729277c86df3a453c762e34afc16d1c8d15e4"
+    },
+    {
+     "t": 3,
+     "S": 1.0,
+     "C": 8967.520833333334,
+     "commit": "a8bc867d428635edc295e8caaac8fcb3c8a5002c",
+     "job": "r0A",
+     "harness_version": "sha256:93e949f0676045b0076058f7409729277c86df3a453c762e34afc16d1c8d15e4"
+    },
+    {
+     "t": 4,
+     "S": 0.9981060606060606,
+     "C": 9107.4375,
+     "commit": "b304f46e7cf41308e986d06dbebadc5cced52bc8",
+     "job": "r3A",
+     "harness_version": "sha256:65fe2517ccaae08d645d8a27928af1e4675ff45ca27669e4b4833aba933be74f"
+    }
+   ],
+   "S_star": 1.0,
+   "incumbent": {
+    "t": 4,
+    "job": "r3A",
+    "S": 0.9981060606060606,
+    "C": 9107.4375,
+    "harness_version": "sha256:65fe2517ccaae08d645d8a27928af1e4675ff45ca27669e4b4833aba933be74f"
+   },
+   "calibration": {
+    "delta": 0.007576,
+    "z": 2.0,
+    "sd_null": 0.003788,
+    "sd_null_bootstrap": 0.002961,
+    "se_bootstrap": 0.00148,
+    "method": "repeated base evaluations",
+    "n_evals": 2,
+    "k": 2,
+    "n_tasks": 24,
+    "S_base": 0.992424,
+    "C_base": 9112.9375,
+    "S_per_eval": [
+     0.9924242424242424,
+     0.9886363636363636
+    ],
+    "max_abs_diff": 0.0037878787878787845,
+    "jobs": [
+     "base",
+     "base_r2"
+    ]
+   },
+   "rounds": [
+    {
+     "t": 0,
+     "winner": "A",
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "ACCEPTED",
+       "reason_code": "admissible",
+       "S": 1.0,
+       "C": 8967.520833333334,
+       "delta_S": 0.007575757575757569,
+       "delta_C": -0.015957167122748955,
+       "novelty": 0,
+       "components": [
+        "prompt"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "LOST",
+       "reason_code": "admissible",
+       "S": 0.9981060606060606,
+       "C": 9382.979166666666,
+       "delta_S": 0.005681818181818121,
+       "delta_C": 0.02963277940473816,
+       "novelty": 0,
+       "components": [
+        "prompt"
+       ],
+       "early_stopped": false
+      }
+     ]
+    },
+    {
+     "t": 1,
+     "winner": null,
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 1.0,
+       "C": 9404.958333333334,
+       "delta_S": 0.0,
+       "delta_C": 0.04878020448795537,
+       "novelty": 1,
+       "components": [
+        "skill"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 1.0,
+       "C": 9252.104166666666,
+       "delta_S": 0.0,
+       "delta_C": 0.031734895142423565,
+       "novelty": 0,
+       "components": [
+        "prompt"
+       ],
+       "early_stopped": false
+      }
+     ]
+    },
+    {
+     "t": 2,
+     "winner": null,
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9943181818181818,
+       "C": 8950.770833333334,
+       "delta_S": -0.005681818181818232,
+       "delta_C": -0.0018678518077971196,
+       "novelty": 0,
+       "components": [
+        "prompt"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9924242424242424,
+       "C": 9232.395833333334,
+       "delta_S": -0.007575757575757569,
+       "delta_C": 0.029537149109866392,
+       "novelty": 1,
+       "components": [
+        "client_tool"
+       ],
+       "early_stopped": false
+      }
+     ]
+    },
+    {
+     "t": 3,
+     "winner": "A",
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "ACCEPTED",
+       "reason_code": "admissible",
+       "S": 0.9981060606060606,
+       "C": 9107.4375,
+       "delta_S": -0.0018939393939394478,
+       "delta_C": 0.015602602911897264,
+       "novelty": 1,
+       "components": [
+        "memory"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9943181818181818,
+       "C": 9034.791666666666,
+       "delta_S": -0.005681818181818232,
+       "delta_C": 0.007501608815145262,
+       "novelty": 1,
+       "components": [
+        "memory"
+       ],
+       "early_stopped": false
+      }
+     ]
+    }
+   ],
+   "heldout": {}
+  },
+  "evo-gpt6sol-r0-voided": {
+   "trajectory": [
+    {
+     "t": 0,
+     "S": 0.9924242424242424,
+     "C": 9112.9375,
+     "commit": "8e1d4d265ade38c66c440be5288acd268eb30c4c",
+     "job": "base",
+     "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+    },
+    {
+     "t": 1,
+     "S": 0.9924242424242424,
+     "C": 9112.9375,
+     "commit": "8e1d4d265ade38c66c440be5288acd268eb30c4c",
+     "job": "base",
+     "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+    }
+   ],
+   "S_star": 0.9924242424242424,
+   "incumbent": {
+    "t": 0,
+    "job": "base",
+    "S": 0.9924242424242424,
+    "C": 9112.9375,
+    "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+   },
+   "calibration": null,
+   "rounds": [
+    {
+     "t": 0,
+     "winner": null,
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "smoke_fail",
+       "reason_code": "smoke_fail",
+       "S": null,
+       "C": null,
+       "delta_S": null,
+       "delta_C": null,
+       "novelty": 0,
+       "components": [
+        "prompt"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "smoke_fail",
+       "reason_code": "smoke_fail",
+       "S": null,
+       "C": null,
+       "delta_S": null,
+       "delta_C": null,
+       "novelty": 0,
+       "components": [
+        "prompt"
+       ],
+       "early_stopped": false
+      }
+     ]
+    }
+   ],
+   "heldout": {}
+  },
+  "evo-sonnet5": {
+   "trajectory": [
+    {
+     "t": 0,
+     "S": 0.9053030303030303,
+     "C": 20497.770833333332,
+     "commit": "e8fcb5fb4b597d8140f384240ea80601f3e6db48",
+     "job": "base",
+     "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+    },
+    {
+     "t": 1,
+     "S": 0.9053030303030303,
+     "C": 20497.770833333332,
+     "commit": "e8fcb5fb4b597d8140f384240ea80601f3e6db48",
+     "job": "base",
+     "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+    }
+   ],
+   "S_star": 0.9053030303030303,
+   "incumbent": {
+    "t": 0,
+    "job": "base",
+    "S": 0.9053030303030303,
+    "C": 20497.770833333332,
+    "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+   },
+   "calibration": {
+    "delta": 0.011364,
+    "z": 2.0,
+    "sd_null": 0.005682,
+    "sd_null_bootstrap": 0.036008,
+    "se_bootstrap": 0.018004,
+    "method": "repeated base evaluations",
+    "n_evals": 2,
+    "k": 2,
+    "n_tasks": 24,
+    "S_base": 0.905303,
+    "C_base": 20497.770833333332,
+    "S_per_eval": [
+     0.9053030303030303,
+     0.8996212121212122
+    ],
+    "max_abs_diff": 0.005681818181818121,
+    "jobs": [
+     "base",
+     "base_r2"
+    ]
+   },
+   "rounds": [
+    {
+     "t": 0,
+     "winner": null,
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "REJECTED",
+       "reason_code": "floor",
+       "S": 0.8882575757575758,
+       "C": 22873.916666666668,
+       "delta_S": -0.017045454545454475,
+       "delta_C": 0.11592215820216235,
+       "novelty": 1,
+       "components": [
+        "skill",
+        "prompt",
+        "prompt"
+       ],
+       "early_stopped": true
+      },
+      {
+       "variant": "B",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.8977272727272727,
+       "C": 19946.708333333332,
+       "delta_S": -0.007575757575757569,
+       "delta_C": -0.026884020925039616,
+       "novelty": 0,
+       "components": [
+        "prompt",
+        "prompt"
+       ],
+       "early_stopped": false
+      }
+     ]
+    }
+   ],
+   "heldout": {}
+  }
+ },
+ "dream": {
+  "dream-gpt6sol": {
+   "explore-pi1": {
+    "S": 1.0,
+    "C": 52574.875,
+    "missing": 0,
+    "n_tasks": 8,
+    "plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "fixed grid from the command line"
+    },
+    "beta": 0.6,
+    "probes": 72
+   },
+   "explore-portfolio": {
+    "S": 1.0,
+    "C": 51256.625,
+    "missing": 0,
+    "n_tasks": 8,
+    "plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "fixed grid from the command line"
+    },
+    "beta": 0.6,
+    "probes": 72
+   },
+   "cycle1": {
+    "status": "promoted",
+    "m_star": 2,
+    "promoted_label": "r0002_dev",
+    "V_selection": [
+     1.0240909090909092,
+     1.0240909090909092,
+     1.0264772727272728
+    ],
+    "V_dev": [
+     1.0240909090909092,
+     1.0240909090909092,
+     1.0261363636363636
+    ],
+    "eligible": [
+     true,
+     true,
+     true
+    ],
+    "labels": [
+     "r0000_pi0",
+     "r0001_dev",
+     "r0002_dev"
+    ],
+    "next_beta": 0.6,
+    "next_plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "Fewer than three live cycles; use the conservative context bootstrap."
+    },
+    "confirmation": {
+     "approved": true,
+     "reason": "admissible: gain +0.0000 within delta 0.0200; shaped 100.0*dS - 15.0*dC + 0.5*nu = +2.4184 > 0 (nu=0)",
+     "details": {
+      "code": "admissible",
+      "S_cand": 1.0,
+      "S_inc": 1.0,
+      "C_cand": 45468.75,
+      "C_inc": 54208.625,
+      "delta_S": 0.0,
+      "delta_C": -0.1612266498181793,
+      "delta": 0.02,
+      "incumbent": {
+       "iteration": 1,
+       "policy_version": "sha256:395058085d2ec43d",
+       "beta": 0.6,
+       "plan": {
+        "branch_count": 3,
+        "refine_count": 2,
+        "reason": "fixed grid from the command line"
+       },
+       "W": 3,
+       "S": 1.0,
+       "C": 54208.625,
+       "missing": 0,
+       "n_tasks": 8,
+       "episodes": [
+        {
+         "task_id": "spec-aggregate-0",
+         "best": 1.0,
+         "baseline": 0.07692307692307693,
+         "probes": 9,
+         "policy_tokens": 84831
+        },
+        {
+         "task_id": "reconcile-0",
+         "best": 1.0,
+         "baseline": 0.08333333333333333,
+         "probes": 9,
+         "policy_tokens": 61752
+        },
+        {
+         "task_id": "multi-edit-0",
+         "best": 1.0,
+         "baseline": 0.2727272727272727,
+         "probes": 9,
+         "policy_tokens": 48704
+        },
+        {
+         "task_id": "policy-qa-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 31711
+        },
+        {
+         "task_id": "schema-out-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 30560
+        },
+        {
+         "task_id": "calendar-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 19721
+        },
+        {
+         "task_id": "pipeline-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 45969
+        },
+        {
+         "task_id": "recovery-hard-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 110421
+        }
+       ]
+      },
+      "candidate": {
+       "iteration": 1,
+       "policy_version": "sha256:8eb0f9e31c7f4651",
+       "beta": 0.6,
+       "plan": {
+        "branch_count": 3,
+        "refine_count": 2,
+        "reason": "fixed grid from the command line"
+       },
+       "W": 3,
+       "S": 1.0,
+       "C": 45468.75,
+       "missing": 0,
+       "n_tasks": 8,
+       "episodes": [
+        {
+         "task_id": "spec-aggregate-0",
+         "best": 1.0,
+         "baseline": 0.07692307692307693,
+         "probes": 9,
+         "policy_tokens": 76245
+        },
+        {
+         "task_id": "reconcile-0",
+         "best": 1.0,
+         "baseline": 0.08333333333333333,
+         "probes": 6,
+         "policy_tokens": 69674
+        },
+        {
+         "task_id": "multi-edit-0",
+         "best": 1.0,
+         "baseline": 0.2727272727272727,
+         "probes": 6,
+         "policy_tokens": 34227
+        },
+        {
+         "task_id": "policy-qa-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 6,
+         "policy_tokens": 23664
+        },
+        {
+         "task_id": "schema-out-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 6,
+         "policy_tokens": 22982
+        },
+        {
+         "task_id": "calendar-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 6,
+         "policy_tokens": 14813
+        },
+        {
+         "task_id": "pipeline-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 43097
+        },
+        {
+         "task_id": "recovery-hard-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 6,
+         "policy_tokens": 79048
+        }
+       ]
+      }
+     },
+     "candidate_index": 2
+    }
+   }
+  },
+  "dream-gpt6sol.log": {},
+  "dream-sonnet5": {
+   "explore-pi1": {
+    "S": 1.0,
+    "C": 147524.875,
+    "missing": 0,
+    "n_tasks": 8,
+    "plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "fixed grid from the command line"
+    },
+    "beta": 0.6,
+    "probes": 72
+   },
+   "explore-portfolio": {
+    "S": 1.0,
+    "C": 148880.0,
+    "missing": 0,
+    "n_tasks": 8,
+    "plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "fixed grid from the command line"
+    },
+    "beta": 0.6,
+    "probes": 72
+   }
+  },
+  "dream-sonnet5.log": {}
+ }
+}

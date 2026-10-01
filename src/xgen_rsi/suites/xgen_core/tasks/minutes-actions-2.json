@@ -1,0 +1,65 @@
+{
+ "id": "minutes-actions-2",
+ "prompt": "minutes.txt 회의록에서 실행 항목을 뽑아 actions.json 에 배열로 저장하세요. 각 항목은 {\"owner\": 담당자, \"task\": 할 일, \"due\": 기한(원문 표기 그대로)} 이고 회의록에 나온 순서를 지키세요. '기타' 줄은 실행 항목이 아닙니다.",
+ "checks": [
+  {
+   "kind": "file_json",
+   "path": "actions.json",
+   "length": 3,
+   "format": true,
+   "required": true,
+   "name": "three-items"
+  },
+  {
+   "kind": "file_json",
+   "path": "actions.json",
+   "path_equals": {
+    "0.owner": "최주임",
+    "0.due": "10월 8일"
+   },
+   "name": "item-0-owner-due"
+  },
+  {
+   "kind": "file_contains",
+   "path": "actions.json",
+   "text": "데모 일정 확정",
+   "name": "item-0-task"
+  },
+  {
+   "kind": "file_json",
+   "path": "actions.json",
+   "path_equals": {
+    "1.owner": "김과장",
+    "1.due": "10월 13일"
+   },
+   "name": "item-1-owner-due"
+  },
+  {
+   "kind": "file_contains",
+   "path": "actions.json",
+   "text": "견적서 재발송",
+   "name": "item-1-task"
+  },
+  {
+   "kind": "file_json",
+   "path": "actions.json",
+   "path_equals": {
+    "2.owner": "박팀장",
+    "2.due": "10월 10일"
+   },
+   "name": "item-2-owner-due"
+  },
+  {
+   "kind": "file_contains",
+   "path": "actions.json",
+   "text": "예산안 수정",
+   "name": "item-2-task"
+  }
+ ],
+ "files": {
+  "minutes.txt": "주간 회의록 (요약 전 원문)\n\n참석: 최주임, 김과장, 박팀장\n\n- 최주임: 데모 일정 확정 건은 제가 맡겠습니다. 10월 8일까지 마무리하겠습니다.\n- 김과장: 견적서 재발송 건은 제가 맡겠습니다. 10월 13일까지 마무리하겠습니다.\n- 박팀장: 예산안 수정 건은 제가 맡겠습니다. 10월 10일까지 마무리하겠습니다.\n- 기타: 다음 회의는 격주로 진행.\n"
+ },
+ "tags": [
+  "korean-business"
+ ]
+}

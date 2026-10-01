@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+dist/
+build/
+*.egg-info/
+runs/
+.coverage
+
+# secrets and local run configuration (never commit)
+.env*
+policy*.json
+rrsi.json
+*.key
+keys/

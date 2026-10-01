@@ -1,0 +1,48 @@
+xgen-agent-runtime-rsi
+Copyright 2026 PlateerLab
+
+This product includes software and texts adapted from the RRSI reference
+implementation (https://github.com/google-research/rrsi, commit be50316),
+Copyright 2026 The rrsi Authors / Google LLC, licensed under the Apache
+License, Version 2.0. All adapted parts were modified by PlateerLab. Each
+adapted file carries a "Portions adapted from google-research/rrsi" header.
+
+Adapted parts:
+
+1. Code structure (module layout, control flow, data formats):
+   - xgen_rsi/evolve/round.py, frontier.py, driver.py  <- rrsi/loop.py, rrsi/driver.py
+     (round structure, frontier.json layout, sequential driver)
+   - xgen_rsi/evolve/history.py                        <- rrsi/history.py
+   - xgen_rsi/evolve/gitops.py                         <- rrsi/gitops.py
+   - xgen_rsi/evolve/config.py                         <- rrsi/config.py
+   - xgen_rsi/evolve/analyst.py, digester.py,
+     propose.py, critic.py                             <- rrsi/analyst.py, digester.py,
+                                                          propose.py, critic.py
+   - xgen_rsi/rsi_math/rrsi.py, types.py               <- rrsi/schedule.py, evaluate.py,
+                                                          selection.py, history.py,
+                                                          components.py
+     (formula semantics reproduced and verified by differential tests
+     against the reference)
+   - xgen_rsi/rsi_math/calibrate.py                    <- rrsi/calibrate.py
+   - small JSON-extraction helpers in xgen_rsi/roles/llm.py and
+     xgen_rsi/evolve/verifiers.py                      <- rrsi/llm.py
+
+2. Role prompt texts: the analyst and trace-digester prompts and digest
+   schemas, the proposer prompt and its JSON action protocol, and the leakage
+   critic's review rules and generic credential patterns
+   (xgen_rsi/evolve/analyst.py, digester.py, propose.py, critic.py), adapted
+   from the corresponding reference modules and extended with XGEN-specific
+   rules.
+
+3. Proposer constitution and pattern library: the section structure, hard
+   rules and rule texts of xgen_rsi/evolve/constitution/SKILL.md (from
+   domains/*/SKILL.md, mainly coding and eng) and the pattern-library format
+   of xgen_rsi/evolve/constitution/PATTERNS.md (from domains/*/PATTERNS.md),
+   rewritten for XGEN business-agent harnesses.
+
+The Dream-RSI method (arXiv:2609.14858) and the RRSI method (arXiv:2609.24972)
+are implemented from the papers' descriptions. The papers themselves are not
+redistributed in this repository; see the arXiv pages. Apart from the parts
+listed above, prompts in this repository are written for this project; where
+a prompt follows a paper's published rules, the rules are restated in our own
+words.

@@ -1,0 +1,45 @@
+{
+ "name": "xgen-core",
+ "splits": {
+  "evolve": [
+   "data-region-revenue-0",
+   "data-region-revenue-1",
+   "data-region-revenue-2",
+   "extract-po-0",
+   "extract-po-1",
+   "extract-po-2",
+   "synth-weekly-0",
+   "synth-weekly-1",
+   "synth-weekly-2",
+   "edit-config-0",
+   "edit-config-1",
+   "edit-config-2",
+   "format-json-answer-0",
+   "format-json-answer-1",
+   "format-json-answer-2",
+   "compute-expense-0",
+   "compute-expense-1",
+   "compute-expense-2",
+   "minutes-actions-0",
+   "minutes-actions-1",
+   "minutes-actions-2",
+   "recovery-missing-file-0",
+   "recovery-missing-file-1",
+   "recovery-missing-file-2"
+  ],
+  "heldout": [
+   "data-region-revenue-3",
+   "extract-po-3",
+   "synth-weekly-3",
+   "edit-config-3",
+   "format-json-answer-3",
+   "compute-expense-3",
+   "minutes-actions-3",
+   "recovery-missing-file-3"
+  ],
+  "smoke": [
+   "data-region-revenue-0",
+   "extract-po-0"
+  ]
+ }
+}

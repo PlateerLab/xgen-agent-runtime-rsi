@@ -1,0 +1,67 @@
+{
+ "id": "data-region-revenue-0",
+ "prompt": "orders.csv 에서 지역이 '대전' 인 주문만 골라 제품별로 합계를 내 주세요. 결과는 summary.csv 로 저장하고 열은 정확히 product,total_qty,revenue 순서여야 합니다. revenue 는 qty×unit_price 의 합이고, revenue 가 큰 순서(같으면 제품명 오름차순)로 정렬하세요.",
+ "checks": [
+  {
+   "kind": "file_exists",
+   "path": "summary.csv",
+   "required": true
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "format": true,
+   "name": "header"
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "rows": 1,
+   "name": "row-count"
+  },
+  {
+   "kind": "file_csv",
+   "path": "summary.csv",
+   "header": [
+    "product",
+    "total_qty",
+    "revenue"
+   ],
+   "cells": [
+    {
+     "row": 0,
+     "col": "product",
+     "value": "모니터"
+    },
+    {
+     "row": 0,
+     "col": "revenue",
+     "value": "1920000"
+    }
+   ],
+   "name": "values-and-order"
+  },
+  {
+   "kind": "file_unchanged",
+   "path": "orders.csv",
+   "sha256": "0f693c17d0e4559abb706f98d53d6717e2c54683ba6733b6df6c3b815bd5bc24",
+   "name": "input-preserved"
+  }
+ ],
+ "files": {
+  "orders.csv": "order_id,region,product,qty,unit_price\nO1000,부산,키보드,6,240000\nO1001,서울,도킹스테이션,3,35000\nO1002,서울,모니터,1,35000\nO1003,광주,마우스,4,89000\nO1004,부산,도킹스테이션,5,89000\nO1005,광주,모니터,6,12000\nO1006,부산,도킹스테이션,4,89000\nO1007,광주,마우스,3,89000\nO1008,광주,도킹스테이션,1,240000\nO1009,광주,도킹스테이션,8,12000\nO1010,서울,마우스,7,35000\nO1011,광주,모니터,9,89000\nO1012,서울,마우스,8,12000\nO1013,대전,모니터,8,240000\nO1014,부산,마우스,5,35000\nO1015,부산,노트북,4,35000\nO1016,부산,노트북,6,35000\nO1017,광주,노트북,6,89000\n"
+ },
+ "tags": [
+  "data"
+ ]
+}
