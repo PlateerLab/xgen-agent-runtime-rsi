@@ -70,6 +70,8 @@ class TrialOutcome:
     usage_tokens: Optional[int] = None
     duration_s: Optional[float] = None
     engine: str = "geny-rsi"
+    #: 이 시행에서 구성요소가 읽은 하네스 파라미터 주소(궤적 기록의 합). None = 모름(기존 엔진·옛 결과)
+    params_read: Optional[List[str]] = None
 
     def to_json(self) -> Dict[str, Any]:
         return asdict(self)
@@ -219,6 +221,8 @@ def run_attempt(
     tokens: Optional[int] = None
     status = "unknown"
     records = sorted(rec_dir.glob("*.json")) if rec_dir.exists() else []
+    # 기록이 없는 geny-rsi 시행(시작 전에 실패)은 아무것도 읽지 않은 것이다. 기존 엔진은 하네스가 없다 → 모름
+    params_read: Optional[List[str]] = [] if engine == "geny-rsi" else None
     if records:
         record_path = str(records[-1])
         try:
@@ -227,6 +231,15 @@ def run_attempt(
             status = str(rec.get("status") or "unknown")
         except (OSError, ValueError):
             pass
+        read: set = set()
+        for path in records:  # 한 시행이 여러 턴이면 그 합
+            try:
+                read |= set(json.loads(path.read_text(encoding="utf-8")).get("params_read") or [])
+            except (OSError, ValueError):
+                read = set()
+                break
+        else:
+            params_read = sorted(read)
     duration = round(time.monotonic() - started, 3)
     usage_tokens: Optional[int] = None
     if usage_sink.get("input_tokens") is not None or usage_sink.get("output_tokens") is not None:
@@ -258,11 +271,22 @@ def run_attempt(
         usage_tokens=usage_tokens,
         duration_s=duration,
         engine=engine,
+        params_read=params_read,
     )
     tmp = done.with_name(done.name + ".tmp")
     tmp.write_text(json.dumps(outcome.to_json(), ensure_ascii=True, indent=1), encoding="utf-8")
     os.replace(tmp, done)  # 원자적 — 반쯤 쓰인 결과가 재개를 막지 않게
     return outcome
+
+
+def _params_read(outcomes: Sequence[TrialOutcome]) -> Optional[List[str]]:
+    """평가 전체에서 읽힌 하네스 파라미터 주소의 합. 한 시행이라도 모르면(None) 전체를 모른다고 본다."""
+    out: set = set()
+    for o in outcomes:
+        if o.params_read is None:
+            return None
+        out |= set(o.params_read)
+    return sorted(out)
 
 
 def _read_outcome(path: Path) -> Optional[TrialOutcome]:
@@ -367,6 +391,7 @@ def evaluate(
         "engine": engine,
         "usage_tokens_mean": _mean([o.usage_tokens for o in outcomes if o.usage_tokens and not o.missing]),
         "duration_s_mean": _mean([o.duration_s for o in outcomes if o.duration_s is not None and not o.missing]),
+        "params_read": _params_read(outcomes),
     }
     if stopped["flag"]:
         upper, _ = upper_lower(stopped["A"], stopped["B"], max(0.0, total_weight - stopped["B"]))

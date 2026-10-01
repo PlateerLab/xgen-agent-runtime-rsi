@@ -58,6 +58,8 @@ class TrajectoryRecord:
     policy_tokens: int = 0
     usage_by_purpose: Dict[str, Dict[str, int]] = field(default_factory=dict)
     components_fired: Dict[str, int] = field(default_factory=dict)
+    #: 이 턴에 구성요소가 읽은 하네스 파라미터 주소 — RRSI 가 "측정되지 않은 편집"을 가린다
+    params_read: List[str] = field(default_factory=list)
     tree_id: str = ""
     nodes: List[ReplayNode] = field(default_factory=list)
     final_text_chars: int = 0
@@ -159,6 +161,7 @@ class TrajectoryRecorder:
         components_fired: Optional[Dict[str, int]],
         error: Optional[str] = None,
         transcript: Optional[List[Dict[str, Any]]] = None,
+        params_read: Optional[List[str]] = None,
     ) -> TrajectoryRecord:
         rec = self.record
         rec.status = status
@@ -167,6 +170,7 @@ class TrajectoryRecorder:
         rec.policy_tokens = int(ledger.policy_tokens())
         rec.usage_by_purpose = ledger.by_purpose()
         rec.components_fired = dict(components_fired or {})
+        rec.params_read = sorted(params_read or [])
         rec.final_text_chars = len(final_text or "")
         if self._keep_content:
             rec.final_text = final_text

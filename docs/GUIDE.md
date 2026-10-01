@@ -67,8 +67,9 @@ geny-rsi 가 읽는 호스트 설정(`host.setting`):
 
 | 설정 | 뜻 |
 |---|---|
-| `XGEN_RSI_HARNESS_DIR` | 하네스 디렉터리 하나로 고정(기본: 내장 H0) |
+| `XGEN_RSI_HARNESS_DIR` | 하네스 하나로 고정. 디렉터리 경로 또는 `builtin:<이름>`(패키지에 든 하네스) |
 | `XGEN_RSI_LINEAGE_FILE` | 정책 계열 → 하네스 디렉터리 표(`{"lineages": {"default": "...", "openai": "...", "anthropic:claude-sonnet": "..."}}`) |
+| (둘 다 없음) | 패키지에 든 계열 표 `harnesses/lineages.json` → 없으면 내장 H0. 채택한 하네스는 `harnesses/<이름>` + 표 항목으로 릴리스한다 |
 | `XGEN_RSI_RECORD_DIR` | 궤적 기록 위치(없으면 기록 안 함) |
 | `XGEN_RSI_RECORD_CONTENT` | 기록에 전사·최종 글 포함(평가용 — 운영 기본 끔, 개인정보) |
 

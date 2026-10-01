@@ -353,15 +353,31 @@
      "commit": "b304f46e7cf41308e986d06dbebadc5cced52bc8",
      "job": "r3A",
      "harness_version": "sha256:65fe2517ccaae08d645d8a27928af1e4675ff45ca27669e4b4833aba933be74f"
+    },
+    {
+     "t": 5,
+     "S": 1.0,
+     "C": 9088.6875,
+     "commit": "9e9023b38d523620cab1ed217bd9cc6e47bb02c0",
+     "job": "r4B",
+     "harness_version": "sha256:0f420a93f856628ad78e975d79a43f4aff61f9a2a1d515ad431242b5b3f45943"
+    },
+    {
+     "t": 6,
+     "S": 1.0,
+     "C": 9088.6875,
+     "commit": "9e9023b38d523620cab1ed217bd9cc6e47bb02c0",
+     "job": "r4B",
+     "harness_version": "sha256:0f420a93f856628ad78e975d79a43f4aff61f9a2a1d515ad431242b5b3f45943"
     }
    ],
    "S_star": 1.0,
    "incumbent": {
-    "t": 4,
-    "job": "r3A",
-    "S": 0.9981060606060606,
-    "C": 9107.4375,
-    "harness_version": "sha256:65fe2517ccaae08d645d8a27928af1e4675ff45ca27669e4b4833aba933be74f"
+    "t": 5,
+    "job": "r4B",
+    "S": 1.0,
+    "C": 9088.6875,
+    "harness_version": "sha256:0f420a93f856628ad78e975d79a43f4aff61f9a2a1d515ad431242b5b3f45943"
    },
    "calibration": {
     "delta": 0.007576,
@@ -521,9 +537,93 @@
        "early_stopped": false
       }
      ]
+    },
+    {
+     "t": 4,
+     "winner": "B",
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9943181818181818,
+       "C": 9379.270833333334,
+       "delta_S": -0.0037878787878787845,
+       "delta_C": 0.029847400361883783,
+       "novelty": 0,
+       "components": [
+        "prompt"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "ACCEPTED",
+       "reason_code": "admissible",
+       "S": 1.0,
+       "C": 9088.6875,
+       "delta_S": 0.0018939393939394478,
+       "delta_C": -0.0020587569225701523,
+       "novelty": 0,
+       "components": [
+        "prompt",
+        "context_mgmt"
+       ],
+       "early_stopped": false
+      }
+     ]
+    },
+    {
+     "t": 5,
+     "winner": null,
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "no_proposal",
+       "reason_code": "no_proposal",
+       "S": null,
+       "C": null,
+       "delta_S": null,
+       "delta_C": null,
+       "novelty": 0,
+       "components": [],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "no_proposal",
+       "reason_code": "no_proposal",
+       "S": null,
+       "C": null,
+       "delta_S": null,
+       "delta_C": null,
+       "novelty": 0,
+       "components": [],
+       "early_stopped": false
+      }
+     ]
     }
    ],
-   "heldout": {}
+   "heldout": {
+    "heldout_final": {
+     "trials": 32,
+     "missing": 0,
+     "S": 1.0,
+     "S_task_se": 0.0,
+     "usage_tokens_mean": 9812,
+     "duration_s_mean": 14.01,
+     "per_category": {
+      "calendar": 1.0,
+      "multi-edit": 1.0,
+      "pipeline": 1.0,
+      "policy-qa": 1.0,
+      "reconcile": 1.0,
+      "recovery-hard": 1.0,
+      "schema-out": 1.0,
+      "spec-aggregate": 1.0
+     }
+    }
+   }
   },
   "evo-gpt6sol-r0-voided": {
    "trajectory": [

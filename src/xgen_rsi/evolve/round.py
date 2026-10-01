@@ -139,10 +139,39 @@ class Draft:
     detail: str = ""
     ev: Optional[EvalResult] = None
     early: Optional[EarlyInfo] = None
+    #: every address the candidate touches relative to H_t (TouchSet), for the exercised-edit guard
+    touched: List[str] = field(default_factory=list)
 
     @property
     def job_suffix(self) -> str:
         return self.variant
+
+
+def _touched_of(prep: Mapping[str, Any]) -> List[str]:
+    """Touched addresses stored with a draft; older drafts only kept the per-edit addresses."""
+    if prep.get("touched") is not None:
+        return list(prep["touched"])
+    return sorted({a for e in prep.get("edits") or [] for a in (e.get("addresses") or []) if isinstance(a, str)})
+
+
+def _covers(read: str, touched: str) -> bool:
+    return read == touched or touched.startswith(read + ".") or read.startswith(touched + ".")
+
+
+def exercised_guard(cand: EvalResult) -> List[str]:
+    """Domain guard: every harness parameter the candidate edits must have been read during its
+    evaluation. An edit the evaluation never consulted has no measured effect (its ΔS/ΔC are noise),
+    yet accepting it would ship an untested behaviour change to hosts where that code path is live
+    (e.g. memory settings when the evaluation runs with memory off). Unknown reads (``None``, e.g. an
+    older run) are not judged."""
+    read = cand.extra.get("params_read")
+    touched = cand.extra.get("touched_params") or []
+    if read is None or not touched:
+        return []
+    dead = [a for a in touched if not any(_covers(r, a) for r in read)]
+    if not dead:
+        return []
+    return [f"edit not exercised by the evaluation (never read in any trial): {', '.join(sorted(dead))}"]
 
 
 def exploration_directive(expl: Exploration) -> Dict[str, Any]:
@@ -252,7 +281,7 @@ class EvolveRun:
 
     def guard_fn(self, inc: EvalResult, cand: EvalResult) -> List[str]:
         return self.domain.guards(inc, cand, max_valid_drop=self.cfg.max_valid_rate_drop,
-                                  max_nosub_rise=self.cfg.max_nosub_rise)
+                                  max_nosub_rise=self.cfg.max_nosub_rise) + exercised_guard(cand)
 
     def reconcile(self) -> None:
         """Bring ``evolve/<name>`` to the frontier's incumbent commit (the frontier is written
@@ -554,7 +583,8 @@ class EvolveRun:
                 self.repo.worktree_checkout(wt, branch)
                 self.log(f"{vid}: resuming committed candidate {str(prep['commit'])[:12]}")
                 return Draft(vid, list(prep.get("edits") or []), diff_path=prep.get("diff_path"),
-                             branch=branch, commit=prep["commit"], harness_version=prep.get("harness_version"))
+                             branch=branch, commit=prep["commit"], harness_version=prep.get("harness_version"),
+                             touched=_touched_of(prep))
         self.repo.worktree_new_branch(wt, branch, self.branch)
         hdir = self.repo.harness_dir(wt)
         inc_manifest: HarnessManifest = ctx["inc_manifest"]
@@ -646,9 +676,11 @@ class EvolveRun:
         if not ok:
             return finish("smoke_fail", json.dumps(detail)[:600], edits, diff_path)
         _write_json(prep_path, {"commit": commit, "branch": branch, "edits": edits, "diff_path": diff_path,
-                                "mechanism": prop.get("mechanism"), "harness_version": version})
+                                "mechanism": prop.get("mechanism"), "harness_version": version,
+                                "touched": list(ts.addresses)})
         self.log(f"{vid}: {len(edits)} edit(s) on {[e['component'] for e in edits]} -> {commit[:12]}")
-        return Draft(vid, edits, diff_path=diff_path, branch=branch, commit=commit, harness_version=version)
+        return Draft(vid, edits, diff_path=diff_path, branch=branch, commit=commit, harness_version=version,
+                     touched=list(ts.addresses))
 
     def _smoke(self, hdir: Path, job: str, inc_ev: EvalResult) -> Tuple[bool, Dict[str, Any]]:
         try:
@@ -781,6 +813,8 @@ class EvolveRun:
                                   f"without an exact stop condition; re-evaluate it")
             if ev is not None and x.early is not None:
                 ev = replace(ev, S=x.early.S_upper)
+            if ev is not None:
+                ev = replace(ev, extra={**ev.extra, "touched_params": [a for a in x.touched if ".params." in a]})
             cands.append(Candidate(x.variant, x.edits, ev, x.gate_failure if ev is None else None,
                                    x.detail, x.commit))
         win_c, decisions = select_round(cands, inc_ev, S_star, delta, self.cfg.params, counts,
@@ -855,7 +889,7 @@ class EvolveRun:
         x = Draft(vdir.name, list(prep.get("edits") or []), diff_path=prep.get("diff_path"),
                   branch=prep.get("branch"), commit=prep.get("commit"),
                   harness_version=prep.get("harness_version"), gate_failure=prep.get("gate_failure"),
-                  detail=prep.get("detail", ""))
+                  detail=prep.get("detail", ""), touched=_touched_of(prep))
         if (vdir / "eval.json").exists() and not x.gate_failure:
             x.ev = load_eval(vdir / "eval.json")
         elif not x.gate_failure:

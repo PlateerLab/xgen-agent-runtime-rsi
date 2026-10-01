@@ -198,9 +198,9 @@ class GenyRSI:
         harness = None
         if self.engine == "geny-rsi":
             from xgen_rsi.harness.spec import load_manifest
-            from xgen_rsi.kernel.executor import BUILTIN_H0
+            from xgen_rsi.kernel.executor import resolve_harness_dir
 
-            m = load_manifest(self.harness_dir or BUILTIN_H0)
+            m = load_manifest(resolve_harness_dir(self.host, self.provider, self.model)[0])
             harness = f"{m.name}@{m.version_id()}"
             if self.record_dir:
                 new = sorted(set(Path(self.record_dir).glob("*.json")) - before, key=os.path.getmtime)

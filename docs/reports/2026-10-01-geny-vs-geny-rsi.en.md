@@ -5,7 +5,12 @@
 > Raw summary: [data/2026-10-01.json](data/2026-10-01.json), produced by `experiments/summarize.py` (no transcripts or answers).
 > The Korean version is the primary text: [2026-10-01-geny-vs-geny-rsi.md](2026-10-01-geny-vs-geny-rsi.md).
 
-<!-- SUMMARY -->
+**Summary**
+- **It swaps in.** Replaying real responses, geny-rsi H0 sends byte-identical requests to geny (sonnet-5 81/81, gpt-6-sol 77/77). Score and token differences are model sampling variance.
+- **These two models cannot show an improvement.** gpt-6-sol scores 0.99–1.0 even on xgen-hard, and sonnet-5 is perfect on xgen-core. The harness RRSI adopted for gpt-6-sol (H\*) scores 1.000 on the held-out split, the same as H0's 0.997 within noise, and uses 5% more tokens.
+- **Dream-RSI found the same best score with less exploration.** An exploration policy developed by gpt-6-sol was promoted after a live check with −25% attempts and −16% tokens.
+- **Real runs exposed a defect.** An edit the evaluation never read (turning off memory archiving) was adopted through the novelty bonus. 0.2.0 blocks it with a guard, and that harness is not bundled (§8).
+- The next measurements use models below the ceiling (gpt-6-luna, claude-haiku-4-5) and a harder suite.
 
 ---
 
@@ -116,9 +121,44 @@ Mean reward per category (evolve, geny / geny-rsi). Categories not listed are 1.
 - xgen-hard lowered the ceiling as intended, especially for sonnet-5 (evolve 0.90, heldout 0.83–0.90). gpt-6-sol stays near 0.99 on xgen-hard too, so it has little room to improve its score.
 
 
-<!-- E4 -->
+---
 
-<!-- E5 -->
+## 6. Experiment 4 — RRSI harness evolution (xgen-hard)
+
+**gpt-6-sol (T=6, two candidates per round, evolve 24 tasks × k2)**
+- δ calibration: the base harness evaluated twice (S 0.9924 · 0.9886) → δ = 0.0076.
+
+| Round | Result | What |
+|---|---|---|
+| r0 | A adopted | a procedure block in the prompt. S 0.992 → 1.000, Ĉ −1.6%. B rejected for higher cost |
+| r1 | none | both candidates at S 1.000 but costlier, rejected by the cost rule |
+| r2 | none | slightly lower scores (0.994 · 0.992) with little cost gain, rejected |
+| r3 | A adopted | turn off `memory.archive`. **An edit the evaluation never reads, adopted through the ν bonus** (§8) |
+| r4 | B adopted | a prompt procedure for averages + old-tool-output pruning threshold 30,000 → 24,000 tokens. S 1.000 |
+| r5 | none | the proposer ran past its turn limit, no proposal |
+
+Held-out split (8 tasks × k4, never used for judging):
+
+| | S | tokens/trial | s/trial |
+|---|---|---|---|
+| geny | 0.9858 ±0.011 | 9,479 | 12.5 |
+| geny-rsi H0 | 0.9972 ±0.004 | 9,309 | 13.4 |
+| geny-rsi H\* | 1.0000 | 9,812 | 14.0 |
+
+- H\*'s score gain is within noise and it uses 5.4% more tokens than H0. One of its three changed addresses (`memory.archive`) is an unmeasured edit, so this H\* is not bundled.
+
+**claude-sonnet-5** — started with the same settings; no adoption in r0, stopped during r1 (decided to redo with models below the ceiling).
+Held-out k4 comparison of H0: geny 0.8125 ±0.119, geny-rsi H0 0.8636 ±0.087. The gap comes from two tasks, order aggregation (0/4 vs 1/4 successes) and the survey pipeline (0.54 vs 0.71), and is within the standard error.
+
+---
+
+## 7. Experiment 5 — Dream-RSI exploration policy improvement (gpt-6-sol)
+
+- Worlds: 40 trees explored live with the initial policy π₁ and the portfolio (replayed, no new generation).
+- Cycle 1: three candidates compared by replay (Eq.1 V) → the developed policy `r0002_dev` selected.
+- Live check (dream8 split, 8 tasks, same exploration grid): best score 1.0 for both, **attempts 72 → 54 (−25%)**, **policy tokens 433,669 → 363,750 (−16.1%)**.
+  RRSI judgement admissible (ΔS 0, ΔC −16.1%) → promoted. β stays 0.6 (fewer than three live cycles).
+- The claude-sonnet-5 cycle was stopped during cycle 1.
 
 ---
 
@@ -140,8 +180,16 @@ These defects surfaced in the pre-release code review (a read-only audit) and wh
 | A relative run directory from the CLI resolved against the harness repo inside git worktree | **a real evolution run** (baseline step) | the run directory is made absolute |
 | The prompt component could not take plain strings in `extra_blocks`, breaking the turn | **a real evolution run** (both gpt-6-sol round-0 candidates failed smoke) | accepts strings and `{"id","text"}` objects; that round was voided and re-run from the same analysis (§6) |
 | Glob's result order varied between runs, so requests diverged even with the same responses | first attempt of experiment 2 | fixed seed-file modification times |
+| **An edit the evaluation never read was adopted.** gpt-6-sol r3A turned off `memory.archive.params.archive`. The evaluation runs with memory off, so that value is never read and ΔS −0.0019 · ΔC +1.6% are noise, yet the novelty bonus (ν=1) carried it over the within-band rule. Used in production with memory on, this harness would stop conversation archiving (an unmeasured change) | review of a **real evolution run** | components record the parameter addresses they read in the trajectory record; a candidate that edits a parameter no trial of its evaluation read is rejected by a domain guard (0.2.0). The gpt-6-sol H\* from before this fix contains that edit and is not bundled |
 
-<!-- LIMITS -->
+---
+
+## 9. Limitations
+
+- **Ceiling.** Both models solve most tasks, so harness differences do not show up in scores. The conclusion goes as far as "equivalent", not yet "better".
+- **Sample size.** 8–24 tasks × k 2–4, one evolution run and one Dream cycle per model. A single task's success or failure moves the mean a lot.
+- **Suites.** xgen-core and xgen-hard were built in this repo (answers computed in code, verified by oracle and empty-answer tests).
+- **Runtime version.** Experiments 1, 3, 4 and 5 ran on runtime 4.78.0. On 4.80.0 only replay equivalence was re-checked.
 
 ---
 

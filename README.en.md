@@ -5,10 +5,12 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml/badge.svg)](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml)
 
-**geny-rsi** is a new execution core for the XGEN agent (Agent-XGeny). It has **the same input/output contract** as the existing
-engine **geny** (the 21-stage pipeline of xgen-agent-runtime), so it swaps in with one setting. It improves its own harness with
-**RRSI** (regularized harness evolution) and its allocation of exploration compute with **Dream-RSI** (replay-based policy
-improvement), turning the evidence-driven harness engineering XGEN did by hand into formulas and records.
+**geny-rsi** is XGEN's second agent runtime. It has **the same input/output contract** as the existing runtime **geny** (the
+21-stage pipeline of xgen-agent-runtime). It improves its own harness with **RRSI** (regularized harness evolution) and its
+allocation of exploration compute with **Dream-RSI** (replay-based policy improvement), turning the evidence-driven harness
+engineering XGEN did by hand into formulas and records.
+
+In XGEN the two run side by side as two agents: **Agent Geny** (`agents/geny`, geny) and **Agent Geny RSI** (`agents/geny-rsi`, geny-rsi).
 
 [한국어](README.md) · [**Detailed comparison report**](docs/reports/2026-10-01-geny-vs-geny-rsi.en.md) · [Usage guide (Korean)](docs/GUIDE.md) · [Design docs (Korean)](docs/README.md) · [Plan (Korean)](docs/PLAN.md)
 
@@ -42,7 +44,7 @@ Agent A = (π, K₀, H, π_E)
 |---|---|
 | Can it be swapped in? | **Replaying real model responses, both engines send byte-identical requests** — sonnet-5 81/81, gpt-6-sol 77/77 calls (32 tasks each); answers, usage and scores identical 64/64 |
 | Same score? | xgen-core: identical scores in all four conditions (gpt-6-sol 0.919/0.914, sonnet-5 1.000). xgen-hard: every difference within the standard error |
-| Does it improve itself? (RRSI) | gpt-6-sol: round 0 adopted one general procedure edit — evolve 0.992 → 1.000, cost −1.6%; candidates that only added cost were rejected by the within-band rule. sonnet-5 and the final held-out comparison are in progress |
+| Does it improve itself? (RRSI) | gpt-6-sol adopted three edits in six rounds, but on the held-out split H\* scores 1.000 vs H0 0.997 (within noise) with +5% tokens. Both models sit at the ceiling, so no improvement can be shown → to be re-measured with models below the ceiling (gpt-6-luna, claude-haiku-4-5) and a harder suite. A defect found in the real runs (adopting an unmeasured edit) is blocked in 0.2.0 |
 | Better use of exploration? (Dream-RSI) | an exploration policy developed by gpt-6-sol found the same best score (8/8) live with **25% fewer attempts and 16% fewer tokens**, passed the RRSI judgement and was promoted |
 
 
@@ -58,7 +60,7 @@ Wheels are published as GitHub Release assets (the same way as xgen-agent-runtim
 
 ```bash
 pip install \
-  "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.1.0/xgen_agent_runtime_rsi-0.1.0-py3-none-any.whl" \
+  "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.2.0/xgen_agent_runtime_rsi-0.2.0-py3-none-any.whl" \
   "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl" \
   "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl"
 ```
@@ -80,8 +82,16 @@ baseline = GenyRSI.agent(provider="openai", model="gpt-6-sol", api_key="sk-...",
 
 ### In a host (an XGEN server, etc.) — one entry point
 
-The existing runtime (xgen-agent-runtime) neither knows nor is modified by this package. The host swaps the class at the place
-where it runs a turn; both entry points share the same contract (`run(host, **kwargs)` → an iterator of text chunks, or the final text).
+The existing runtime (xgen-agent-runtime) neither knows nor is modified by this package. The host imports both packages the same
+way and picks the class where it runs a turn; both entry points share the same contract (`run(host, **kwargs)` → an iterator of
+text chunks, or the final text).
+
+| XGEN node | Runtime | Package | Entry point |
+|---|---|---|---|
+| Agent Geny (`agents/geny`) | geny | xgen-agent-runtime | `AgentTurnExecutor` |
+| Agent Geny RSI (`agents/geny-rsi`) | geny-rsi | xgen-agent-runtime-rsi | `GenyRSITurnExecutor` |
+
+XGEN's Agent Geny RSI node inherits the Agent Geny node, so ports, settings and server wiring are the same; only the entry point differs.
 
 ```python
 from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor   # geny (existing)
@@ -91,7 +101,10 @@ executor = GenyRSITurnExecutor() if use_geny_rsi else AgentTurnExecutor()
 out = executor.run(host, **kwargs)
 ```
 
-Pin an evolved harness with the host setting `XGEN_RSI_HARNESS_DIR`, or per model family with `XGEN_RSI_LINEAGE_FILE`.
+**Harnesses ship inside the package.** Without settings, the bundled lineage table (`harnesses/lineages.json`) picks the harness
+for the model, falling back to the built-in H0 (the same behaviour as Agent Geny). Harnesses adopted by RRSI are added to this repo's
+`harnesses/` and that table and released, so a host picks them up by **bumping the version**, as with the runtime. Administrators can
+override with `XGEN_RSI_HARNESS_DIR=builtin:<name>` (one bundled harness) or a directory path, or `XGEN_RSI_LINEAGE_FILE` (a lineage table).
 
 ### Evolve a harness
 

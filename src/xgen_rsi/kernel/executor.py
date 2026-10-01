@@ -5,8 +5,11 @@
 
 관리자 설정(``host.setting``):
 
-* ``XGEN_RSI_HARNESS_DIR`` — 하네스 디렉터리 하나로 고정(기본: 내장 H0)
+* ``XGEN_RSI_HARNESS_DIR`` — 하네스 하나로 고정. 디렉터리 경로 또는 ``builtin:<이름>``(패키지에 든 하네스)
 * ``XGEN_RSI_LINEAGE_FILE`` — 정책 계열 → 하네스 디렉터리 표(JSON ``{"lineages": {...}}``)
+
+둘 다 없으면 **패키지에 든 계열 표**(``harnesses/lineages.json``)로 고른다. RRSI 로 채택한 하네스는 이 저장소의
+``harnesses/`` 와 그 표에 넣어 릴리스한다 — 호스트(XGEN)는 패키지 버전을 올리면 새 하네스를 쓴다(런타임과 같은 방식).
 * ``XGEN_RSI_RECORD_DIR`` — 궤적 기록 위치(없으면 기록하지 않음)
 * ``XGEN_RSI_RECORD_CONTENT`` — 기록에 전사·최종 글까지 남김(평가 실행용, 운영 기본 끔)
 """
@@ -22,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from xgen_rsi.harness.runtime import LoadedHarness, TurnRuntime, instantiate
-from xgen_rsi.harness.spec import HarnessManifest, LineageTable, load_manifest
+from xgen_rsi.harness.spec import HarnessManifest, HarnessSpecError, LineageTable, load_manifest
 from xgen_rsi.kernel.engine import TurnEngine
 from xgen_rsi.kernel.events import EventHub
 from xgen_rsi.kernel.ledger import LedgerClient, UsageLedger
@@ -33,7 +36,10 @@ from xgen_rsi.kernel.tools import ToolRunner
 
 logger = logging.getLogger(__name__)
 
-BUILTIN_H0 = Path(__file__).resolve().parent.parent / "harnesses" / "h0"
+BUILTIN_DIR = Path(__file__).resolve().parent.parent / "harnesses"
+BUILTIN_H0 = BUILTIN_DIR / "h0"
+#: 패키지에 든 계열 표 — 설정이 없을 때 쓴다(``{"lineages": {"default": "h0", "openai:gpt-6-luna": "..."}}``).
+BUILTIN_LINEAGES = BUILTIN_DIR / "lineages.json"
 
 _CACHE_LOCK = threading.Lock()
 _MANIFEST_CACHE: Dict[Tuple[str, float], Tuple[HarnessManifest, str]] = {}
@@ -70,18 +76,39 @@ def load_cached(root: os.PathLike[str] | str) -> Tuple[HarnessManifest, str]:
     return entry
 
 
+def builtin_harness(name: str) -> Path:
+    """패키지에 든 하네스 ``name`` 의 디렉터리. 이름은 ``harnesses/`` 바로 아래 디렉터리 하나다."""
+    path = (BUILTIN_DIR / name).resolve()
+    if path.parent != BUILTIN_DIR.resolve() or not (path / "manifest.json").is_file():
+        raise HarnessSpecError(f"no builtin harness named {name!r}")
+    return path
+
+
+def _from_table(table_file: Path, provider: str, model: str, *, builtin: bool) -> Tuple[Path, str]:
+    target = LineageTable.load(table_file).resolve(provider, model)
+    if target.startswith("builtin:"):
+        return builtin_harness(target[len("builtin:"):]), target
+    if builtin:
+        return builtin_harness(target), f"builtin:{target}"
+    path = Path(target)
+    return (path if path.is_absolute() else table_file.resolve().parent / path), target
+
+
 def resolve_harness_dir(host: Any, provider: str, model: str) -> Tuple[Path, str]:
-    """(하네스 디렉터리, 계보 이름)."""
+    """(하네스 디렉터리, 계보 이름). 순서: 고정 설정 → 계열 표 설정 → 패키지 계열 표 → 내장 H0."""
     fixed = _setting(host, "XGEN_RSI_HARNESS_DIR")
     if fixed:
+        if fixed.startswith("builtin:"):
+            return builtin_harness(fixed[len("builtin:"):]), fixed
         return Path(fixed), "fixed"
     lineage_file = _setting(host, "XGEN_RSI_LINEAGE_FILE")
     if lineage_file:
-        table = LineageTable.load(lineage_file)
-        target = table.resolve(provider, model)
-        base = Path(lineage_file).resolve().parent
-        path = Path(target)
-        return (path if path.is_absolute() else base / path), target
+        return _from_table(Path(lineage_file), provider, model, builtin=False)
+    if BUILTIN_LINEAGES.is_file():
+        try:
+            return _from_table(BUILTIN_LINEAGES, provider, model, builtin=True)
+        except KeyError:
+            pass
     return BUILTIN_H0, "builtin:h0"
 
 
@@ -169,6 +196,7 @@ class PreparedTurn:
                     components_fired=summary.get("components"),
                     error=error or None,
                     transcript=list(state.messages) if keep else None,
+                    params_read=self.rt.harness.params_read(),
                 )
             except Exception:  # noqa: BLE001
                 logger.warning("rsi: trajectory finish failed", exc_info=True)

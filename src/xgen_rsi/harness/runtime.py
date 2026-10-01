@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Set
 
 from xgen_rsi.harness.kinds import PROTOCOLS
 from xgen_rsi.harness.spec import (
@@ -40,12 +40,18 @@ class Component:
         return self.spec.id
 
     def param(self, key: str, default: Any = None) -> Any:
+        # 읽은 키를 남긴다 — 평가가 편집된 파라미터를 실제로 읽었는지(편집이 측정됐는지) 가리는 근거
+        self.__dict__.setdefault("_params_read", set()).add(key)
         node: Any = self.spec.params
         for part in key.split("."):
             if not isinstance(node, Mapping) or part not in node:
                 return default
             node = node[part]
         return node
+
+    def params_read(self) -> Set[str]:
+        """이 턴에 :meth:`param` 으로 읽은 편집 주소(``<component_id>.params.<key>``)."""
+        return {f"{self.spec.id}.params.{k}" for k in self.__dict__.get("_params_read", ())}
 
 
 @dataclass
@@ -68,6 +74,13 @@ class LoadedHarness:
     def maybe(self, kind: str) -> Optional[Any]:
         found = self.all(kind)
         return found[0] if found else None
+
+    def params_read(self) -> List[str]:
+        """이 턴에 구성요소들이 읽은 편집 주소 전부(정렬)."""
+        out: Set[str] = set()
+        for c in self.components.values():
+            out |= c.params_read()
+        return sorted(out)
 
 
 def resolve_impl(impl: str) -> type:

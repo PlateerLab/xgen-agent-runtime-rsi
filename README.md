@@ -5,10 +5,11 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml/badge.svg)](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml)
 
-**geny-rsi** 는 XGEN 에이전트(Agent-XGeny)의 실행 코어를 갈아끼우는 새 하네스 엔진이다. 기존 엔진 **geny**
-(xgen-agent-runtime 의 21-stage 파이프라인)와 **입력·출력 계약이 같아서** 설정 하나로 바꿔 끼우고, 하네스는
-**RRSI**(정규화된 하네스 진화)로, 탐색 계산의 배분은 **Dream-RSI**(기록 재생 기반 정책 개선)로 스스로 개선한다.
-XGEN 이 손으로 해 온 증거 기반 하네스 엔지니어링을 수식과 기록으로 기계화한 것이다.
+**geny-rsi** 는 XGEN 의 두 번째 에이전트 런타임이다. 기존 런타임 **geny**(xgen-agent-runtime 의 21-stage 파이프라인)와
+**입력·출력 계약이 같고**, 하네스는 **RRSI**(정규화된 하네스 진화)로, 탐색 계산의 배분은 **Dream-RSI**(기록 재생 기반 정책
+개선)로 스스로 개선한다. XGEN 이 손으로 해 온 증거 기반 하네스 엔지니어링을 수식과 기록으로 기계화한 것이다.
+
+XGEN 에서는 두 에이전트로 나란히 쓴다: **Agent Geny**(`agents/geny`, geny) 와 **Agent Geny RSI**(`agents/geny-rsi`, geny-rsi).
 
 [English](README.en.md) · [**상세 비교 보고서**](docs/reports/2026-10-01-geny-vs-geny-rsi.md) · [사용 가이드](docs/GUIDE.md) · [설계 문서](docs/README.md) · [계획](docs/PLAN.md)
 
@@ -42,7 +43,7 @@ XGEN 이 손으로 해 온 증거 기반 하네스 엔지니어링을 수식과 
 |---|---|
 | 갈아끼울 수 있나 | **실제 모델 응답 재생에서 두 엔진의 요청이 바이트 단위로 같다** — sonnet-5 81/81, gpt-6-sol 77/77 호출(32과제씩), 답·usage·점수 64/64 동일 |
 | 같은 점수인가 | xgen-core: 네 조건 모두 점수 동일(gpt-6-sol 0.919/0.914, sonnet-5 1.000). xgen-hard: 차이는 모두 표준오차 안 |
-| 스스로 나아지나 (RRSI) | gpt-6-sol: 라운드 0 에서 일반 절차 편집 1개 채택 — evolve 0.992 → 1.000, 비용 −1.6%. 비용만 늘린 후보는 띠 안 규칙으로 반려. sonnet-5·보류 분할 최종 비교는 진행 중 |
+| 스스로 나아지나 (RRSI) | gpt-6-sol 6라운드에서 3번 채택했지만 보류 분할에서 H\* 1.000 vs H0 0.997(잡음 안), 토큰 +5%. 두 모델 모두 천장이라 개선을 가릴 수 없다 → 천장 아래 모델(gpt-6-luna·claude-haiku-4-5)과 더 어려운 스위트로 다시 잰다. 실측에서 찾은 결함(측정되지 않은 편집 채택)은 0.2.0 에서 막았다 |
 | 탐색을 더 잘 쓰나 (Dream-RSI) | gpt-6-sol 이 직접 개발한 탐색 정책이 라이브 확인에서 같은 최고점(8/8)을 **시도 25%·토큰 16% 적게** 찾아 RRSI 판정을 통과, 승격 |
 
 
@@ -58,7 +59,7 @@ GitHub Release 의 wheel 로 설치한다(xgen-agent-runtime 과 같은 방식, 
 
 ```bash
 pip install \
-  "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.1.0/xgen_agent_runtime_rsi-0.1.0-py3-none-any.whl" \
+  "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.2.0/xgen_agent_runtime_rsi-0.2.0-py3-none-any.whl" \
   "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl" \
   "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl"
 ```
@@ -80,8 +81,15 @@ baseline = GenyRSI.agent(provider="openai", model="gpt-6-sol", api_key="sk-...",
 
 ### 호스트(XGEN 서버 등)에서 — 진입점 하나
 
-기존 런타임(xgen-agent-runtime)은 이 패키지를 모르고 고치지도 않는다. 호스트가 턴을 실행하는 자리에서 클래스만 바꾼다.
-두 진입점은 같은 계약(`run(host, **kwargs)` → 글 조각 이터레이터 또는 최종 글)이다.
+기존 런타임(xgen-agent-runtime)은 이 패키지를 모르고 고치지도 않는다. 호스트는 두 패키지를 똑같이 import 하고, 턴을
+실행하는 자리에서 클래스만 고른다. 두 진입점은 같은 계약(`run(host, **kwargs)` → 글 조각 이터레이터 또는 최종 글)이다.
+
+| XGEN 노드 | 런타임 | 패키지 | 진입점 |
+|---|---|---|---|
+| Agent Geny (`agents/geny`) | geny | xgen-agent-runtime | `AgentTurnExecutor` |
+| Agent Geny RSI (`agents/geny-rsi`) | geny-rsi | xgen-agent-runtime-rsi | `GenyRSITurnExecutor` |
+
+XGEN 의 Agent Geny RSI 노드는 Agent Geny 노드를 이어받아 포트·세부 설정·서버 배선이 같고, 진입점만 다르다.
 
 ```python
 from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor   # geny (기존)
@@ -91,7 +99,10 @@ executor = GenyRSITurnExecutor() if use_geny_rsi else AgentTurnExecutor()
 out = executor.run(host, **kwargs)
 ```
 
-진화된 하네스는 호스트 설정 `XGEN_RSI_HARNESS_DIR` 로 고정하거나 `XGEN_RSI_LINEAGE_FILE` 로 모델 계열마다 다르게 준다.
+**하네스는 패키지에 담겨 온다.** 설정이 없으면 패키지의 계열 표(`harnesses/lineages.json`)로 모델에 맞는 하네스를 고르고,
+없으면 내장 H0(Agent Geny 와 같은 동작)로 돈다. RRSI 로 채택한 하네스는 이 저장소의 `harnesses/` 와 그 표에 넣어 릴리스하므로,
+호스트는 runtime 처럼 **버전만 올리면** 새 하네스를 쓴다. 관리자는 `XGEN_RSI_HARNESS_DIR=builtin:<이름>`(패키지 하네스 하나)이나
+디렉터리 경로, `XGEN_RSI_LINEAGE_FILE`(계열 표)로 덮어쓸 수 있다.
 
 ### 하네스를 진화시키기
 

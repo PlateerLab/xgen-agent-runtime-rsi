@@ -203,18 +203,21 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 
 ---
 
-## 4. 구현 현황 (2026-10-01)
+## 4. 구현 현황 (2026-10-01, 0.2.0)
 
-검증한 것(테스트 298개, 깨끗한 venv + 릴리스 런타임 wheel 4.76.0 에서도 같은 결과):
+검증한 것(테스트 396개, 런타임 wheel 4.80.0):
 
 - `rsi_math`: 두 논문 수식 전부 + 정확 경계 조기 종료. 공식 RRSI 구현과의 차분 테스트, 장난감 세계(05 §8.8) V_A=0.61·V_B=0.70·AUC 0.4556 재현, mypy strict.
-- 커널·H0: 기존 21-stage 엔진과 동등성 9 시나리오(청크·usage·모델 요청 동일), 압축·가드·스킬·계보 라우팅·기록.
-- 평가: EvalHost·결정적 검증기·러너(재개·조기 종료)·`xgen-core` 스위트.
-- L1: `rsi evolve` — 각본 역할·각본 정책으로 라운드 전체(수용·바닥 반려·조기 종료·누설 반려와 수리·태그 정규화·재판정·충돌 후 재개).
-- L2: `rsi dream` — 라이브 탐색(셀 = 실제 에이전트 턴, 부모 작업 공간 이어받기), 탐색 트리 → world, 재생·샌드박스·정보 은닉, 사이클과 RRSI 판정 온라인 확인.
-- 패키징: wheel 에 H0·헌법·스위트 데이터 포함, 설치본에서 `rsi` 명령 동작.
+- 커널·H0: 기존 21-stage 엔진과 동등성 9 시나리오 + 실제 응답 재생에서 요청 바이트 동일(sonnet-5 81/81, gpt-6-sol 77/77).
+- 평가: EvalHost·결정적 검증기·러너(재개·조기 종료)·`xgen-core`·`xgen-hard` 스위트.
+- L1: `rsi evolve` — 실제 모델(gpt-6-sol T=6, sonnet-5 일부)로 라운드 전체. 측정되지 않은 편집을 거르는 가드(구성요소가 읽은 파라미터 기록).
+- L2: `rsi dream` — 실제 모델로 탐색 트리 → world → 사이클 → RRSI 온라인 확인 → 승격(gpt-6-sol).
+- 배포: PlateerLab 공개, GitHub Release wheel. 하네스는 패키지(`harnesses/` + `lineages.json`)에 담겨 온다.
+- XGEN: Agent Geny(`agents/geny`, geny) 와 Agent Geny RSI(`agents/geny-rsi`, geny-rsi) 두 노드. 로컬에서 XGEN 실행 경로(스타 실행기·서버 호스트)로
+  두 노드 × 두 공급자(claude-haiku-4-5, gpt-6-luna) × 일반·참조자료·도구 호출을 실제 모델로 확인.
 
 검증하지 않은 것:
 
-- 실제 LLM 측정 전부 — H0 기준선·δ 보정·RRSI 파일럿(T=5)·실제 세계 풀 Dream 사이클. 등록 LLM 정책 JSON(D-4)과 역할 모델(D-5)이 정해지면 `rsi evolve run`·`rsi dream explore/cycle` 로 바로 돈다.
+- 천장 아래 모델·더 어려운 스위트에서의 비교(gpt-6-sol·sonnet-5 는 xgen-hard 에서도 0.9~1.0 이라 차이가 잡음 안).
+- XGEN 서버(배포 환경)에서의 실행 — MR 머지·배포 후.
 - 운영 턴 안 탐색(control_flow 의 Explore 트리거·샌드박스 스냅샷 분기)과 Phase 8 승격 파이프라인.
