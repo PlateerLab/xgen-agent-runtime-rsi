@@ -57,3 +57,14 @@ def test_config_dump_never_writes_credentials():
     cfg = EvolveConfig.from_dict({"roles": {"analyser": {"api_key": "sk-leak"}}, "policy": {"api_key": "sk-leak2"},
                                   "proposer": {"provider": "openai", "model": "m", "api_key": "sk-leak3"}})
     assert "sk-leak" not in json.dumps(cfg.dump())
+
+
+def test_critic_and_constitution_reject_environment_assertions():
+    """하네스는 평가 샌드박스의 도구 사정을 사실로 박지 않는다(운영 도구 표면은 다르다) — 2026-10-02 haiku r1B."""
+    from pathlib import Path
+
+    from xgen_rsi.evolve import critic
+
+    assert "ENVIRONMENT ASSERTIONS" in critic.SYSTEM_TMPL and "conditional on what the agent's tool list" in critic.SYSTEM_TMPL
+    skill = (Path(critic.__file__).parent / "constitution" / "SKILL.md").read_text(encoding="utf-8")
+    assert "No claims about the environment" in skill

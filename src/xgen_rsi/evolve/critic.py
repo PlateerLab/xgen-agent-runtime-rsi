@@ -100,6 +100,14 @@ REJECT if ANY of:
 10. USER-FACING COPY: text that changes user-facing notices or exposes internal
    system details (limits, model names, rules, workers, scores) to the end
    user. User-facing notices are kernel constants, not harness content.
+11. ENVIRONMENT ASSERTIONS: text that states as a fact which tools, files,
+   services or capabilities the agent's environment has or lacks ("this
+   workspace has no code-execution tool", "scripts you write will never run",
+   "only file tools exist"). The harness ships to many deployments with
+   different tool surfaces; the evaluation sandbox is only one of them.
+   Guidance about tools must be conditional on what the agent's tool list
+   actually shows ("if no code-execution tool is listed, ..."). An
+   unconditional claim about the environment is a rejection reason.
 
 Otherwise ACCEPT. You are reviewing intent and content, not style.
 Runtime correctness (invalid params, crashes) is NOT your job: deterministic

@@ -1,6 +1,8 @@
 """실험 결과 요약 — runs/ 의 시행 결과를 읽어 보고서용 표(JSON)를 만든다(대화 내용·답은 싣지 않는다).
 
     python experiments/summarize.py --runs runs --out docs/reports/data/2026-10-01.json
+    python experiments/summarize.py --runs runs --out docs/reports/data/2026-10-02.json \
+        --exp p1=xgen-pro --evo evo-luna --evo evo-haiku --dream dream-luna --no-replay
 """
 
 from __future__ import annotations
@@ -55,16 +57,23 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default="runs")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--exp", action="append", help="엔진 비교 실험 디렉터리=스위트 (기본: e1=xgen-core, e3=xgen-hard)")
+    ap.add_argument("--evo", action="append", help="진화 실행 디렉터리 이름(기본: evo-*)")
+    ap.add_argument("--dream", action="append", help="Dream 실행 디렉터리 이름(기본: dream-*)")
+    ap.add_argument("--no-replay", action="store_true", help="재생 동등성(e2b)을 싣지 않는다")
     args = ap.parse_args()
     runs = Path(args.runs)
+    exps = [tuple(x.split("=", 1)) for x in (args.exp or ["e1=xgen-core", "e3=xgen-hard"])]
+    evo_runs = [str(runs / n) for n in args.evo] if args.evo else sorted(glob.glob(str(runs / "evo-*")))
+    dream_runs = [str(runs / n) for n in args.dream] if args.dream else sorted(glob.glob(str(runs / "dream-*")))
     data: Dict[str, Any] = {"engine_comparison": {}, "replay_equivalence": {}, "evolution": {}, "dream": {}}
-    for exp, suite in (("e1", "xgen-core"), ("e3", "xgen-hard")):
+    for exp, suite in exps:
         for d in sorted(glob.glob(str(runs / exp / "*" / "*" / "*"))):
             label, engine, split = Path(d).parts[-3:]
             s = summarize_eval(d)
             if s:
                 data["engine_comparison"].setdefault(suite, {})[f"{label}/{engine}/{split}"] = s
-    for f in sorted(glob.glob(str(runs / "e2b" / "replay_*.json"))):
+    for f in ([] if args.no_replay else sorted(glob.glob(str(runs / "e2b" / "replay_*.json")))):
         r = json.loads(Path(f).read_text(encoding="utf-8"))
         label = Path(f).stem.split("_", 1)[1]
         data["replay_equivalence"][label] = {
@@ -74,7 +83,7 @@ def main() -> None:
             "usage_equal": sum(v["usage_geny"] == v["usage_geny_rsi"] for v in r.values()),
             "reward_equal": sum(v["reward_geny"] == v["reward_geny_rsi"] for v in r.values()),
         }
-    for run in sorted(glob.glob(str(runs / "evo-*"))):
+    for run in evo_runs:
         fr_path = Path(run) / "frontier.json"
         if not fr_path.exists():
             continue
@@ -98,7 +107,9 @@ def main() -> None:
             if s:
                 held[Path(d).name] = s
         data["evolution"][Path(run).name]["heldout"] = held
-    for run in sorted(glob.glob(str(runs / "dream-*"))):
+    for run in dream_runs:
+        if not Path(run).is_dir():
+            continue
         entry: Dict[str, Any] = {}
         for name in ("explore-pi1", "explore-portfolio"):
             p = Path(run) / f"pool-{name.split('-', 1)[1]}" / "iter0000" / "explore_summary.json"
@@ -106,11 +117,10 @@ def main() -> None:
                 s = json.loads(p.read_text(encoding="utf-8"))
                 entry[name] = {k: s.get(k) for k in ("S", "C", "missing", "n_tasks", "plan", "beta")}
                 entry[name]["probes"] = sum(e["probes"] for e in s.get("episodes", []))
-        cm = Path(run) / "cycle1" / "cycle_manifest.json"
-        if cm.exists():
+        for cm in sorted(Path(run).glob("cycle*/cycle_manifest.json")):
             c = json.loads(cm.read_text(encoding="utf-8"))
-            entry["cycle1"] = {k: c.get(k) for k in ("status", "m_star", "promoted_label", "V_selection", "V_dev", "eligible",
-                                                     "labels", "next_beta", "next_plan", "confirmation")}
+            entry[cm.parent.name] = {k: c.get(k) for k in ("status", "m_star", "promoted_label", "V_selection", "V_dev",
+                                                           "eligible", "labels", "next_beta", "next_plan", "confirmation")}
         data["dream"][Path(run).name] = entry
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")

@@ -203,21 +203,22 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 
 ---
 
-## 4. 구현 현황 (2026-10-01, 0.2.0)
+## 4. 구현 현황 (2026-10-02, 0.4.0)
 
-검증한 것(테스트 396개, xgen-agent-runtime 이 설치되지 않은 환경):
+검증한 것(테스트 469개, xgen-agent-runtime 이 설치되지 않은 환경):
 
-- `rsi_math`: 두 논문 수식 전부 + 정확 경계 조기 종료. 공식 RRSI 구현과의 차분 테스트, 장난감 세계(05 §8.8) V_A=0.61·V_B=0.70·AUC 0.4556 재현, mypy strict.
-- 커널·H0: 기존 21-stage 엔진과 동등성 9 시나리오 + 실제 응답 재생에서 요청 바이트 동일(sonnet-5 81/81, gpt-6-sol 77/77).
-- 평가: EvalHost·결정적 검증기·러너(재개·조기 종료)·`xgen-core`·`xgen-hard` 스위트.
-- L1: `rsi evolve` — 실제 모델(gpt-6-sol T=6, sonnet-5 일부)로 라운드 전체. 측정되지 않은 편집을 거르는 가드(구성요소가 읽은 파라미터 기록).
-- L2: `rsi dream` — 실제 모델로 탐색 트리 → world → 사이클 → RRSI 온라인 확인 → 승격(gpt-6-sol).
-- 배포: PlateerLab 공개, GitHub Release wheel. 하네스는 패키지(`harnesses/` + `lineages.json`)에 담겨 온다.
-- XGEN: Agent Geny(`agents/geny`, geny) 와 Agent Geny RSI(`agents/geny-rsi`, geny-rsi) 두 노드. 로컬에서 XGEN 실행 경로(스타 실행기·서버 호스트)로
-  두 노드 × 두 공급자(claude-haiku-4-5, gpt-6-luna) × 일반·참조자료·도구 호출을 실제 모델로 확인.
+- 독립 패키지: 바탕 런타임은 xgen-agent-runtime 4.80.0 사본 `xgen_rsi.base`(519 파일 중 517 바이트 동일, `COPY.json`·`tools/sync_base.py`·테스트로 검사).
+- `rsi_math`: 두 논문 수식 전부 + 정확 경계 조기 종료. 공식 RRSI 구현과의 차분 테스트, mypy strict.
+- 커널·H0: 기존 엔진과 동등성 9 시나리오 + 실제 응답 재생에서 요청 바이트 동일(1차).
+- 스위트: `xgen-core`·`xgen-hard`·`xgen-pro`(천장 아래 모델용, 3회 난이도 보정).
+- L1 RRSI: 실제 모델로 진화 — 1차 gpt-6-sol(T=6), 2차 gpt-6-luna(T=5, 역할 gpt-6-sol)·claude-haiku-4-5(2/5, 역할 claude-sonnet-5).
+  가드: 측정되지 않은 편집, 환경 단정(검토자·헌법 규칙 11), 분석기 보고 강제.
+- L2 Dream: 실제 모델 사이클 — gpt-6-sol 승격(1차), luna 유지·거절(2차).
+- XGEN: Agent Geny / Agent Geny RSI 두 노드, 에이전트 단위 패키지 선택(대화·화면 API·예약 작업, workflow !2049·!2050).
 
-검증하지 않은 것:
+검증하지 않은 것 / 남은 것:
 
-- 천장 아래 모델·더 어려운 스위트에서의 비교(gpt-6-sol·sonnet-5 는 xgen-hard 에서도 0.9~1.0 이라 차이가 잡음 안).
-- XGEN 서버(배포 환경)에서의 실행 — MR 머지·배포 후.
-- 운영 턴 안 탐색(control_flow 의 Explore 트리거·샌드박스 스냅샷 분기)과 Phase 8 승격 파이프라인.
+- **보류 분할에서 확인된 점수·비용 개선** — luna H\* 는 evolve +0.029 였지만 보류 분할에서 잡음 안이라 패키지에 넣지 않았다.
+- haiku 진화 3~5 라운드·보류 분할·Dream(API 크레딧 소진으로 중단).
+- 평가 호스트에 코드 실행 도구가 없다(운영과 다름) — 샌드박스 실행을 평가에 넣는 것이 다음 과제.
+- 운영 턴 안 탐색과 Phase 8 승격 파이프라인.

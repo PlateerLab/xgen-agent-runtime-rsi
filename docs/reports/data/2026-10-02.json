@@ -1,0 +1,781 @@
+{
+ "engine_comparison": {
+  "xgen-pro": {
+   "haiku/geny-rsi/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.8255,
+    "S_task_se": 0.0577,
+    "usage_tokens_mean": 311274,
+    "duration_s_mean": 104.28,
+    "per_category": {
+     "audit": 0.333,
+     "config": 1.0,
+     "contacts": 0.262,
+     "ledger": 0.479,
+     "minutes": 0.833,
+     "policy": 0.881,
+     "schedule": 0.65,
+     "search": 0.81
+    }
+   },
+   "haiku/geny-rsi/heldout": {
+    "trials": 16,
+    "missing": 0,
+    "S": 0.7657,
+    "S_task_se": 0.1116,
+    "usage_tokens_mean": 570971,
+    "duration_s_mean": 153.61,
+    "per_category": {
+     "audit": 0.25,
+     "config": 0.991,
+     "contacts": 0.25,
+     "ledger": 0.5,
+     "minutes": 0.5,
+     "policy": 0.964,
+     "schedule": 0.308,
+     "search": 0.857
+    }
+   },
+   "haiku/geny/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.8096,
+    "S_task_se": 0.0583,
+    "usage_tokens_mean": 427815,
+    "duration_s_mean": 115.27,
+    "per_category": {
+     "audit": 0.278,
+     "config": 1.0,
+     "contacts": 0.307,
+     "ledger": 0.479,
+     "minutes": 0.674,
+     "policy": 0.917,
+     "schedule": 0.571,
+     "search": 0.81
+    }
+   },
+   "haiku/geny/heldout": {
+    "trials": 16,
+    "missing": 0,
+    "S": 0.744,
+    "S_task_se": 0.1142,
+    "usage_tokens_mean": 523729,
+    "duration_s_mean": 138.04,
+    "per_category": {
+     "audit": 0.333,
+     "config": 1.0,
+     "contacts": 0.312,
+     "ledger": 0.5,
+     "minutes": 0.273,
+     "policy": 0.929,
+     "schedule": 0.192,
+     "search": 0.821
+    }
+   },
+   "luna/geny-rsi/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.9186,
+    "S_task_se": 0.0372,
+    "usage_tokens_mean": 39971,
+    "duration_s_mean": 40.65,
+    "per_category": {
+     "audit": 0.792,
+     "config": 0.995,
+     "contacts": 0.616,
+     "ledger": 0.708,
+     "minutes": 0.819,
+     "policy": 1.0,
+     "schedule": 0.833,
+     "search": 1.0
+    }
+   },
+   "luna/geny-rsi/heldout": {
+    "trials": 32,
+    "missing": 0,
+    "S": 0.907,
+    "S_task_se": 0.0743,
+    "usage_tokens_mean": 50619,
+    "duration_s_mean": 42.87,
+    "per_category": {
+     "audit": 0.562,
+     "config": 1.0,
+     "contacts": 0.562,
+     "ledger": 0.594,
+     "minutes": 0.977,
+     "policy": 1.0,
+     "schedule": 0.75,
+     "search": 1.0
+    }
+   },
+   "luna/geny/evolve": {
+    "trials": 48,
+    "missing": 0,
+    "S": 0.906,
+    "S_task_se": 0.0431,
+    "usage_tokens_mean": 41494,
+    "duration_s_mean": 39.99,
+    "per_category": {
+     "audit": 0.583,
+     "config": 1.0,
+     "contacts": 0.454,
+     "ledger": 0.729,
+     "minutes": 0.833,
+     "policy": 0.988,
+     "schedule": 1.0,
+     "search": 1.0
+    }
+   },
+   "luna/geny/heldout": {
+    "trials": 32,
+    "missing": 0,
+    "S": 0.9155,
+    "S_task_se": 0.0707,
+    "usage_tokens_mean": 43707,
+    "duration_s_mean": 38.87,
+    "per_category": {
+     "audit": 0.688,
+     "config": 1.0,
+     "contacts": 0.453,
+     "ledger": 0.719,
+     "minutes": 0.909,
+     "policy": 1.0,
+     "schedule": 0.942,
+     "search": 1.0
+    }
+   }
+  }
+ },
+ "replay_equivalence": {},
+ "evolution": {
+  "evo-luna": {
+   "trajectory": [
+    {
+     "t": 0,
+     "S": 0.9186241610738255,
+     "C": 39971.25,
+     "commit": "81fb9ae53bc06a5a4dab3b76fe74095f1eba09cc",
+     "job": "base",
+     "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+    },
+    {
+     "t": 1,
+     "S": 0.9186241610738255,
+     "C": 39971.25,
+     "commit": "81fb9ae53bc06a5a4dab3b76fe74095f1eba09cc",
+     "job": "base",
+     "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+    },
+    {
+     "t": 2,
+     "S": 0.9278523489932886,
+     "C": 40470.6875,
+     "commit": "4226574cafb50aef7a6d78036e45091ffc3d6d05",
+     "job": "r1B",
+     "harness_version": "sha256:b8c7241085eadd9d61232daccaa5600fae5e160fe712368176a25852e4598da4"
+    },
+    {
+     "t": 3,
+     "S": 0.9278523489932886,
+     "C": 40470.6875,
+     "commit": "4226574cafb50aef7a6d78036e45091ffc3d6d05",
+     "job": "r1B",
+     "harness_version": "sha256:b8c7241085eadd9d61232daccaa5600fae5e160fe712368176a25852e4598da4"
+    },
+    {
+     "t": 4,
+     "S": 0.947986577181208,
+     "C": 43175.166666666664,
+     "commit": "c224c47133f75e1795653439d4ec60dc4e104470",
+     "job": "r3A",
+     "harness_version": "sha256:915962da82a171bde122a7310d97771dece456f8a0754c839c767b9bd4521d23"
+    },
+    {
+     "t": 5,
+     "S": 0.947986577181208,
+     "C": 43175.166666666664,
+     "commit": "c224c47133f75e1795653439d4ec60dc4e104470",
+     "job": "r3A",
+     "harness_version": "sha256:915962da82a171bde122a7310d97771dece456f8a0754c839c767b9bd4521d23"
+    }
+   ],
+   "S_star": 0.947986577181208,
+   "incumbent": {
+    "t": 4,
+    "job": "r3A",
+    "S": 0.947986577181208,
+    "C": 43175.166666666664,
+    "harness_version": "sha256:915962da82a171bde122a7310d97771dece456f8a0754c839c767b9bd4521d23"
+   },
+   "calibration": {
+    "delta": 0.025168,
+    "z": 2.0,
+    "sd_null": 0.012584,
+    "sd_null_bootstrap": 0.019089,
+    "se_bootstrap": 0.009544,
+    "method": "repeated base evaluations",
+    "n_evals": 2,
+    "k": 2,
+    "n_tasks": 24,
+    "S_base": 0.918624,
+    "C_base": 39971.25,
+    "S_per_eval": [
+     0.9186241610738255,
+     0.9060402684563759
+    ],
+    "max_abs_diff": 0.012583892617449632,
+    "jobs": [
+     "base",
+     "base_r2"
+    ]
+   },
+   "rounds": [
+    {
+     "t": 0,
+     "winner": null,
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9337248322147651,
+       "C": 46532.0625,
+       "delta_S": 0.015100671140939603,
+       "delta_C": 0.16413828689370485,
+       "novelty": 1,
+       "components": [
+        "prompt",
+        "skill",
+        "prompt",
+        "prompt"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9253355704697986,
+       "C": 51934.145833333336,
+       "delta_S": 0.006711409395973145,
+       "delta_C": 0.29928750873023324,
+       "novelty": 0,
+       "components": [
+        "prompt",
+        "prompt",
+        "prompt",
+        "prompt"
+       ],
+       "early_stopped": false
+      }
+     ]
+    },
+    {
+     "t": 1,
+     "winner": "B",
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9320469798657718,
+       "C": 49706.791666666664,
+       "delta_S": 0.01342281879194629,
+       "delta_C": 0.2435636030063274,
+       "novelty": 1,
+       "components": [
+        "skill"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "ACCEPTED",
+       "reason_code": "admissible",
+       "S": 0.9278523489932886,
+       "C": 40470.6875,
+       "delta_S": 0.009228187919463116,
+       "delta_C": 0.012494918222472402,
+       "novelty": 1,
+       "components": [
+        "skill"
+       ],
+       "early_stopped": false
+      }
+     ]
+    },
+    {
+     "t": 2,
+     "winner": null,
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.924496644295302,
+       "C": 40170.5625,
+       "delta_S": -0.003355704697986628,
+       "delta_C": -0.007415861171125398,
+       "novelty": 0,
+       "components": [
+        "skill",
+        "skill"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9119127516778524,
+       "C": 42195.666666666664,
+       "delta_S": -0.01593959731543626,
+       "delta_C": 0.042622927190615785,
+       "novelty": 0,
+       "components": [
+        "prompt"
+       ],
+       "early_stopped": false
+      }
+     ]
+    },
+    {
+     "t": 3,
+     "winner": "A",
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "ACCEPTED",
+       "reason_code": "admissible",
+       "S": 0.947986577181208,
+       "C": 43175.166666666664,
+       "delta_S": 0.020134228187919434,
+       "delta_C": 0.06682562945506336,
+       "novelty": 0,
+       "components": [
+        "skill",
+        "context_mgmt"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "LOST",
+       "reason_code": "admissible",
+       "S": 0.9354026845637584,
+       "C": 39903.541666666664,
+       "delta_S": 0.007550335570469802,
+       "delta_C": -0.014013743486154905,
+       "novelty": 0,
+       "components": [
+        "context_mgmt",
+        "prompt"
+       ],
+       "early_stopped": false
+      }
+     ]
+    },
+    {
+     "t": 4,
+     "winner": null,
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9303691275167785,
+       "C": 51798.145833333336,
+       "delta_S": -0.017617449664429574,
+       "delta_C": 0.19972080787180915,
+       "novelty": 0,
+       "components": [
+        "skill",
+        "skill"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.9387583892617449,
+       "C": 51200.395833333336,
+       "delta_S": -0.009228187919463116,
+       "delta_C": 0.1858760437134002,
+       "novelty": 0,
+       "components": [
+        "skill"
+       ],
+       "early_stopped": false
+      }
+     ]
+    }
+   ],
+   "heldout": {
+    "heldout_final": {
+     "trials": 32,
+     "missing": 0,
+     "S": 0.9106,
+     "S_task_se": 0.0673,
+     "usage_tokens_mean": 63576,
+     "duration_s_mean": 44.15,
+     "per_category": {
+      "audit": 0.688,
+      "config": 1.0,
+      "contacts": 0.562,
+      "ledger": 0.781,
+      "minutes": 0.966,
+      "policy": 1.0,
+      "schedule": 0.596,
+      "search": 1.0
+     }
+    }
+   }
+  },
+  "evo-haiku": {
+   "trajectory": [
+    {
+     "t": 0,
+     "S": 0.825503355704698,
+     "C": 311273.7083333333,
+     "commit": "c7e6a4118d1f711a754a8a098f7ed5abd3bf4ca6",
+     "job": "base",
+     "harness_version": "sha256:627d7c301144957a705c7948243e7bdf01498caa3ea856f526b0a5c1b4d69a01"
+    },
+    {
+     "t": 1,
+     "S": 0.8078859060402684,
+     "C": 278331.9791666667,
+     "commit": "7ef671e47a913f99bfcae279f5e08a146b52b850",
+     "job": "r0A",
+     "harness_version": "sha256:4b6c6953baa25fa86a1593cf3e4f15e4be3e37a737284e8bd792a8a62e9ecbb9"
+    }
+   ],
+   "S_star": 0.825503355704698,
+   "incumbent": {
+    "t": 1,
+    "job": "r0A",
+    "S": 0.8078859060402684,
+    "C": 278331.9791666667,
+    "harness_version": "sha256:4b6c6953baa25fa86a1593cf3e4f15e4be3e37a737284e8bd792a8a62e9ecbb9"
+   },
+   "calibration": {
+    "delta": 0.031879,
+    "z": 2.0,
+    "sd_null": 0.01594,
+    "sd_null_bootstrap": 0.014631,
+    "se_bootstrap": 0.007315,
+    "method": "repeated base evaluations",
+    "n_evals": 2,
+    "k": 2,
+    "n_tasks": 24,
+    "S_base": 0.825503,
+    "C_base": 311273.7083333333,
+    "S_per_eval": [
+     0.825503355704698,
+     0.8095637583892618
+    ],
+    "max_abs_diff": 0.01593959731543626,
+    "jobs": [
+     "base",
+     "base_r2"
+    ]
+   },
+   "rounds": [
+    {
+     "t": 0,
+     "winner": "A",
+     "decisions": [
+      {
+       "variant": "A",
+       "outcome": "ACCEPTED",
+       "reason_code": "admissible",
+       "S": 0.8078859060402684,
+       "C": 278331.9791666667,
+       "delta_S": -0.017617449664429574,
+       "delta_C": -0.10582881973247274,
+       "novelty": 1,
+       "components": [
+        "prompt",
+        "skill",
+        "skill"
+       ],
+       "early_stopped": false
+      },
+      {
+       "variant": "B",
+       "outcome": "REJECTED",
+       "reason_code": "cost_rule",
+       "S": 0.8389261744966443,
+       "C": 361103.5208333333,
+       "delta_S": 0.01342281879194629,
+       "delta_C": 0.1600835893490844,
+       "novelty": 1,
+       "components": [
+        "prompt",
+        "skill"
+       ],
+       "early_stopped": false
+      }
+     ]
+    }
+   ],
+   "heldout": {}
+  }
+ },
+ "dream": {
+  "dream-luna": {
+   "explore-pi1": {
+    "S": 1.0,
+    "C": 201210.125,
+    "missing": 0,
+    "n_tasks": 8,
+    "plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "fixed grid from the command line"
+    },
+    "beta": 0.6,
+    "probes": 72
+   },
+   "explore-portfolio": {
+    "S": 1.0,
+    "C": 252843.125,
+    "missing": 0,
+    "n_tasks": 8,
+    "plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "fixed grid from the command line"
+    },
+    "beta": 0.6,
+    "probes": 72
+   },
+   "cycle1": {
+    "status": "kept",
+    "m_star": 0,
+    "promoted_label": "r0000_pi0",
+    "V_selection": [
+     1.0253496503496504,
+     1.0253496503496504,
+     1.0253496503496504
+    ],
+    "V_dev": [
+     1.0217532467532469,
+     1.0217532467532469,
+     1.0217532467532469
+    ],
+    "eligible": [
+     true,
+     true,
+     true
+    ],
+    "labels": [
+     "r0000_pi0",
+     "r0001_dev",
+     "r0002_dev"
+    ],
+    "next_beta": 0.6,
+    "next_plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "parallel refine: fixed fallback grid (B workspaces x R refinements)"
+    },
+    "confirmation": null
+   },
+   "cycle1-sol": {
+    "status": "vetoed",
+    "m_star": 2,
+    "promoted_label": "r0000_pi0",
+    "V_selection": [
+     1.0253496503496504,
+     1.0252816627816628,
+     1.0284090909090908
+    ],
+    "V_dev": [
+     1.0217532467532469,
+     1.0217712842712843,
+     1.0222582972582974
+    ],
+    "eligible": [
+     true,
+     true,
+     true
+    ],
+    "labels": [
+     "r0000_pi0",
+     "r0001_dev",
+     "r0002_dev"
+    ],
+    "next_beta": 0.6,
+    "next_plan": {
+     "branch_count": 3,
+     "refine_count": 2,
+     "reason": "parallel refine: fixed fallback grid (B workspaces x R refinements)"
+    },
+    "confirmation": {
+     "approved": false,
+     "reason": "cost rule failed: gain +0.0000 within delta 0.0250; shaped 100.0*dS - 15.0*dC + 0.5*nu = -0.0244 <= 0 (nu=0)",
+     "details": {
+      "code": "cost_rule",
+      "S_cand": 1.0,
+      "S_inc": 1.0,
+      "C_cand": 221281.75,
+      "C_inc": 220921.875,
+      "delta_S": 0.0,
+      "delta_C": 0.001628969516938963,
+      "delta": 0.025,
+      "incumbent": {
+       "iteration": 1,
+       "policy_version": "sha256:395058085d2ec43d",
+       "beta": 0.6,
+       "plan": {
+        "branch_count": 3,
+        "refine_count": 2,
+        "reason": "fixed grid from the command line"
+       },
+       "W": 3,
+       "S": 1.0,
+       "C": 220921.875,
+       "missing": 0,
+       "n_tasks": 8,
+       "episodes": [
+        {
+         "task_id": "minutes-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 512362
+        },
+        {
+         "task_id": "ledger-0",
+         "best": 1.0,
+         "baseline": 0.125,
+         "probes": 9,
+         "policy_tokens": 71914
+        },
+        {
+         "task_id": "contacts-0",
+         "best": 1.0,
+         "baseline": 0.07142857142857142,
+         "probes": 9,
+         "policy_tokens": 343489
+        },
+        {
+         "task_id": "config-0",
+         "best": 1.0,
+         "baseline": 0.47572815533980584,
+         "probes": 9,
+         "policy_tokens": 283387
+        },
+        {
+         "task_id": "policy-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 93370
+        },
+        {
+         "task_id": "schedule-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 52322
+        },
+        {
+         "task_id": "search-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 9,
+         "policy_tokens": 329323
+        },
+        {
+         "task_id": "audit-0",
+         "best": 1.0,
+         "baseline": 0.08333333333333333,
+         "probes": 9,
+         "policy_tokens": 81208
+        }
+       ]
+      },
+      "candidate": {
+       "iteration": 1,
+       "policy_version": "sha256:3bf5b24482721329",
+       "beta": 0.6,
+       "plan": {
+        "branch_count": 3,
+        "refine_count": 2,
+        "reason": "fixed grid from the command line"
+       },
+       "W": 3,
+       "S": 1.0,
+       "C": 221281.75,
+       "missing": 0,
+       "n_tasks": 8,
+       "episodes": [
+        {
+         "task_id": "minutes-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 8,
+         "policy_tokens": 650500
+        },
+        {
+         "task_id": "ledger-0",
+         "best": 1.0,
+         "baseline": 0.125,
+         "probes": 8,
+         "policy_tokens": 85410
+        },
+        {
+         "task_id": "contacts-0",
+         "best": 1.0,
+         "baseline": 0.07142857142857142,
+         "probes": 9,
+         "policy_tokens": 377275
+        },
+        {
+         "task_id": "config-0",
+         "best": 1.0,
+         "baseline": 0.47572815533980584,
+         "probes": 3,
+         "policy_tokens": 86425
+        },
+        {
+         "task_id": "policy-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 3,
+         "policy_tokens": 53358
+        },
+        {
+         "task_id": "schedule-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 3,
+         "policy_tokens": 24460
+        },
+        {
+         "task_id": "search-0",
+         "best": 1.0,
+         "baseline": 0.0,
+         "probes": 3,
+         "policy_tokens": 389375
+        },
+        {
+         "task_id": "audit-0",
+         "best": 1.0,
+         "baseline": 0.08333333333333333,
+         "probes": 9,
+         "policy_tokens": 103451
+        }
+       ]
+      }
+     },
+     "candidate_index": 2
+    }
+   }
+  }
+ }
+}

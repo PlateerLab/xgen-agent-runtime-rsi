@@ -316,6 +316,25 @@ def test_analyst_report_and_unknown_ids(tmp_path):
     assert "1 requests skipped: unknown task_id" in analyst.calls[1]["prompt"]
 
 
+def test_analyst_is_told_the_budget_and_reports_at_the_cap(tmp_path, monkeypatch):
+    """상한까지 요약만 요청하는 분석기 — 남은 턴을 알려 주고, 상한에서는 요약 대신 보고를 받는다(빈 분석으로 끝나지 않게)."""
+    from xgen_rsi.evolve import analyst as analyst_mod
+
+    monkeypatch.setattr(analyst_mod, "MAX_TURNS", 4)
+    view = _view(tmp_path)
+    digest = j({"action": "digest_many", "requests": [{"task_id": "t", "lens": "failure"}]})
+    analyst = ScriptedRoleLLM([digest, digest, digest, digest,
+                               j({"action": "report", "failure_modes": [{"mode": "late", "n_tasks": 1}]})])
+    digester = ScriptedRoleLLM([j({"action": "return", "digest": {"blocker": "b"}})] * 8)
+    rep = analyze(analyst, digester, {"t": view}, {"t": TaskResult(rewards=[0.2])}, tmp_path / "r0",
+                  briefs={"analyst": "A", "digester": "D"}, render=render_trial, task_row=task_row, parallel=1)
+    assert [m["mode"] for m in rep["failure_modes"]] == ["late"] and "error" not in rep
+    prompts = [c["prompt"] for c in analyst.calls]
+    assert "BUDGET: 3 turn(s) left" in prompts[1] and "BUDGET EXHAUSTED" in prompts[4]
+    assert rep["n_digests"] == 4
+    assert "report (1 failure modes)" in (tmp_path / "r0" / "analysis" / "transcript.txt").read_text()
+
+
 # ------------------------------------------------------------------ gitops --
 
 

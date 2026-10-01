@@ -5,7 +5,7 @@
     rsi harness show [DIR]                      하네스 구성요소·버전·편집 주소
     rsi harness validate [DIR]
     rsi harness diff A B                        두 버전의 편집 주소 차이와 kind(=RRSI 태그)
-    rsi suite build OUT [--suite xgen-core|xgen-hard] [--per-category N]   내장 스위트 생성
+    rsi suite build OUT [--suite xgen-core|xgen-hard|xgen-pro] [--per-category N]   내장 스위트 생성
     rsi eval --harness DIR --suite DIR --split evolve --k 2 --policy policy.json --out OUT [--engine geny-rsi|geny]
     rsi evolve {baseline,calibrate,round,run,readjudicate,reevaluate,heldout,status} ...   (RRSI L1)
     rsi dream {build-worlds,cycle,status} ...   (Dream-RSI L2)
@@ -90,6 +90,8 @@ def cmd_suite(args: argparse.Namespace) -> int:
 
     if args.suite == "xgen-hard":
         from xgen_rsi.suites.build_xgen_hard import SUITE_NAME, build
+    elif args.suite == "xgen-pro":
+        from xgen_rsi.suites.build_xgen_pro import SUITE_NAME, build
     else:
         from xgen_rsi.suites.build_xgen_core import SUITE_NAME, build
 
@@ -157,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = ss.add_parser("build")
     p.add_argument("out")
     p.add_argument("--per-category", type=int, default=4)
-    p.add_argument("--suite", choices=("xgen-core", "xgen-hard"), default="xgen-core")
+    p.add_argument("--suite", choices=("xgen-core", "xgen-hard", "xgen-pro"), default="xgen-core")
 
     e = sub.add_parser("eval", help="하네스 하나를 스위트 분할에서 k 회 평가")
     e.add_argument("--harness", required=True)

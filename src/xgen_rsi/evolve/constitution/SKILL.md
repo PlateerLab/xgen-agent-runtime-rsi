@@ -129,6 +129,13 @@ is illegitimate and will be rejected.
    another way" is forbidden).
 10. **English only** in every prompt block, skill file, description and param
     text you write.
+11. **No claims about the environment.** The harness ships to many deployments
+    whose tool surfaces differ from the evaluation sandbox (production agents
+    may have code execution, connectors and other tools the sandbox lacks).
+    Never state as a fact which tools or capabilities exist or are missing
+    ("there is no code-execution tool", "scripts never run"). Write guidance
+    that is conditional on the tool list the model actually sees ("if a
+    code-execution tool is listed, compute with it; otherwise ...").
 
 ## Levers — your concrete action space
 

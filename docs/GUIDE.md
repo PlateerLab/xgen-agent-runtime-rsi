@@ -109,11 +109,12 @@ geny-rsi 가 읽는 호스트 설정(`host.setting`):
 ## 4. 평가
 
 ```bash
-# 내장 스위트: xgen-core(규칙 하나짜리 업무 과제) · xgen-hard(양·규칙 문서·함정) — 각 8범주 × 4, evolve 24 · heldout 8 · smoke 2
-rsi suite build ./suites/xgen-hard --suite xgen-hard
+# 내장 스위트: xgen-core(규칙 하나짜리 업무 과제) · xgen-hard(양·규칙 문서·함정) · xgen-pro(천장 아래 모델용: 긴 문맥·대량 출력·
+# 여러 파일 편집·겹친 규정·제약 퍼즐·도구 검색·검증) — 각 8범주 × 4, evolve 24 · heldout 8 · smoke 2
+rsi suite build ./suites/xgen-pro --suite xgen-pro
 
 # 하네스 하나를 평가 (정책 = provider·model·키를 담은 JSON, 저장소 밖에 둔다)
-rsi eval --harness src/xgen_rsi/harnesses/h0 --suite ./suites/xgen-hard --split evolve --k 2 \
+rsi eval --harness src/xgen_rsi/harnesses/h0 --suite ./suites/xgen-pro --split evolve --k 2 \
          --policy policy.json --out runs/h0-evolve [--engine geny-rsi|geny]
 ```
 
@@ -128,7 +129,7 @@ rsi eval --harness src/xgen_rsi/harnesses/h0 --suite ./suites/xgen-hard --split 
 ## 5. RRSI 하네스 진화 (L1)
 
 ```bash
-rsi evolve init runs/evo --suite ./suites/xgen-hard --policy policy.json --config rrsi.json
+rsi evolve init runs/evo --suite ./suites/xgen-pro --policy policy.json --config rrsi.json
 rsi evolve run runs/evo                 # baseline(H0) → δ 보정(반복 평가 2회) → 라운드 0..T-1 (STOP 파일로 멈춤)
 rsi evolve status runs/evo
 rsi evolve heldout runs/evo final       # 보류 분할 — 보고 전용, 어떤 판정에도 쓰지 않는다
@@ -162,11 +163,11 @@ rsi evolve readjudicate runs/evo 3      # 저장된 측정으로 라운드 3 재
 
 ```bash
 # 검증기가 있는 과제를 branch × attempt 격자로 실제로 푼다 — 셀 하나 = 에이전트 턴 하나
-rsi dream explore runs/pool --suite ./suites/xgen-hard --policy policy.json \
+rsi dream explore runs/pool --suite ./suites/xgen-pro --policy policy.json \
                   --explorer builtin:portfolio --iteration 0 --branches 3 --refine 2 --W 3
 
 # 탐색 트리 + 평가 시행 → 재생 world 풀
-rsi dream build-worlds runs/worlds.json --trace-pool runs/pool --eval-job h0=runs/evo/jobs/base --suite ./suites/xgen-hard
+rsi dream build-worlds runs/worlds.json --trace-pool runs/pool --eval-job h0=runs/evo/jobs/base --suite ./suites/xgen-pro
 
 # 사이클: π^0..π^{M−1} 개발·재생 평가 → argmax V → 온라인 확인(RRSI 판정) → promoted_policy.py
 rsi dream cycle runs/cycle1 --worlds runs/worlds.json --incumbent builtin:parallel_refine --iteration 1 \
@@ -182,7 +183,21 @@ rsi dream status runs/cycle1
 
 ---
 
-## 7. 실험 재현
+## 7. 바탕 런타임 사본(`xgen_rsi.base`) 갱신
+
+geny-rsi 와 geny 의 차이는 harness pipeline 하나여야 한다. 그래서 기억·도구·작업·앱·스토리지·자기 진화 같은 요소 계층은
+xgen-agent-runtime 의 코드를 그대로 복사해 쓰고(`xgen_rsi.base`), 원본 버전과 파일별 해시를 `src/xgen_rsi/base/COPY.json` 에 둔다.
+`tests/test_base_copy.py` 가 사본이 그 기록과 같은지 본다 — 사본을 손으로 고치면 실패한다.
+
+```bash
+python tools/sync_base.py /path/to/xgen-agent-runtime/src/xgen_agent_runtime 4.81.0   # 새 버전으로 복사 + COPY.json
+python tools/sync_base.py --check                                                      # 사본이 기록과 같은가
+```
+
+사본에서 꼭 고쳐야 하는 곳은 `tools/sync_base.py` 의 `LOCAL_EDITS` 에 이유와 함께 적는다(지금은 버전 표기·머리말·docstring 경로 세 곳).
+runtime 을 올릴 때는 복사 → 전체 테스트(동등성 포함) → 릴리스 순서다. XGEN 은 두 패키지를 각각 같은 버전대로 올린다.
+
+## 8. 실험 재현
 
 `experiments/` 의 스크립트가 보고서의 모든 수치를 만든다(정책 JSON 은 저장소 밖에).
 

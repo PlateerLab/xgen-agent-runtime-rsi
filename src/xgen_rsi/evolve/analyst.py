@@ -134,8 +134,25 @@ def analyze(analyst_llm: Any, digester_llm: Any, traces: Mapping[str, Any],
     ])
     transcript = ""
     n_digests = 0
-    for _ in range(MAX_TURNS):
-        prompt = (context + "\n\n=== INTERACTION LOG ===\n" + transcript
+    log_path = round_dir / "analysis" / "transcript.txt"
+
+    def _save_log() -> None:
+        try:
+            log_path.write_text(transcript, encoding="utf-8")
+        except OSError:
+            pass
+
+    for turn in range(MAX_TURNS + 1):
+        left = MAX_TURNS - turn
+        if left <= 0:
+            # 상한 — 지금까지의 요약으로 보고하게 한다(빈 분석으로 끝나면 제안자가 실패 유형 없이 편집한다).
+            budget = ("\nBUDGET EXHAUSTED: do not dispatch more digesters. Reply NOW with the report action, "
+                      "built from the digests above.")
+        elif left <= 3:
+            budget = f"\nBUDGET: {left} turn(s) left — finish follow-ups and reply with the report action soon."
+        else:
+            budget = ""
+        prompt = (context + "\n\n=== INTERACTION LOG ===\n" + transcript + budget
                   + "\nReply with exactly one JSON action object.")
         raw = analyst_llm.generate(prompt, system=system, json_only=True)
         try:
@@ -157,7 +174,13 @@ def analyze(analyst_llm: Any, digester_llm: Any, traces: Mapping[str, Any],
                 report[key] = [x for x in items if isinstance(x, dict)] if isinstance(items, list) else []
             report["failure_modes"].sort(key=lambda m: -_int(m.get("n_tasks")))
             report["n_digests"] = n_digests
+            report["turns"] = turn + 1
+            transcript += f"\n[you] report ({len(report['failure_modes'])} failure modes)"
+            _save_log()
             return report
+        if a == "digest_many" and left <= 0:
+            transcript += "\n[you] digest_many\n[result] ERROR: budget exhausted — reply with the report action"
+            continue
         if a == "digest_many":
             reqs = [r for r in (act.get("requests") or [])[:MAX_REQUESTS_PER_CALL] if isinstance(r, dict)]
             for r in reqs:
@@ -185,6 +208,7 @@ def analyze(analyst_llm: Any, digester_llm: Any, traces: Mapping[str, Any],
             transcript += f"\n[you] digest_many ({len(valid)} requests)\n[result] {result}"
         else:
             transcript += f"\n[you] {json.dumps(act)[:300]}\n[result] ERROR: unknown action {a}"
+    _save_log()
     return {"failure_modes": [], "capability_gaps": [], "success_habits": [],
             "error": "analyst hit max turns", "n_digests": n_digests}
 

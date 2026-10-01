@@ -6,20 +6,84 @@
 [![CI](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml/badge.svg)](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml)
 
 **geny-rsi** 는 XGEN 의 두 번째 에이전트 런타임이다. 기존 런타임 **geny**(xgen-agent-runtime 의 21-stage 파이프라인)와
-**입력·출력 계약이 같고**, 하네스는 **RRSI**(정규화된 하네스 진화)로, 탐색 계산의 배분은 **Dream-RSI**(기록 재생 기반 정책
-개선)로 스스로 개선한다. XGEN 이 손으로 해 온 증거 기반 하네스 엔지니어링을 수식과 기록으로 기계화한 것이다.
+입력·출력 계약이 같고, 기억·작업·도구·앱·스토리지·자기 진화 같은 Geny 의 요소도 같다. 다른 것은 **한 턴을 실행하는 harness
+pipeline** 하나다. geny-rsi 의 pipeline 은 고정 커널과 편집 가능한 하네스로 나뉘고, 하네스는 **RRSI** 로, 탐색 계산의 배분은
+**Dream-RSI** 로 측정을 거쳐 개선된다. XGEN 이 손으로 해 온 증거 기반 하네스 엔지니어링을 수식과 기록으로 기계화한 것이다.
 
-XGEN 에서는 두 에이전트로 나란히 쓴다: **Agent Geny**(`agents/geny`, geny) 와 **Agent Geny RSI**(`agents/geny-rsi`, geny-rsi).
-
-**독립 패키지다.** geny-rsi 는 xgen-agent-runtime 을 import 하지도, 의존성으로 두지도 않는다. 바탕 런타임(공급자 계층·도구·기억·
-호스트 계약·21-stage 엔진)은 xgen-agent-runtime 4.80.0 을 복사한 `xgen_rsi.base` 이고 이 저장소가 소유한다. 원본이 바뀌어도
-여기는 따로 갱신한다.
-
-[English](README.en.md) · [**상세 비교 보고서**](docs/reports/2026-10-01-geny-vs-geny-rsi.md) · [사용 가이드](docs/GUIDE.md) · [설계 문서](docs/README.md) · [계획](docs/PLAN.md)
+[English](README.en.md) · [**상세 보고서 (2차, luna·haiku)**](docs/reports/2026-10-02-luna-haiku-xgen-pro.md) · [1차 보고서](docs/reports/2026-10-01-geny-vs-geny-rsi.md) · [사용 가이드](docs/GUIDE.md) · [설계 문서](docs/README.md) · [계획](docs/PLAN.md)
 
 ---
 
-## 한눈에 — geny 와 geny-rsi
+## Agent Geny 와 Agent Geny RSI — 다른 것은 harness pipeline 하나
+
+XGEN 에는 Geny 에이전트가 둘 있다. 캔버스·채팅·화면에서 쓰는 법은 같고, 고르는 것은 **턴을 어떻게 실행하느냐**다.
+
+| | **Agent Geny** (`agents/geny`) | **Agent Geny RSI** (`agents/geny-rsi`) |
+|---|---|---|
+| 패키지 | xgen-agent-runtime | xgen-agent-runtime-rsi — **서로 import·의존하지 않는다** |
+| 포트·세부 설정·자격증명·모델 | 같다 | 같다 |
+| 기억·작업·도구·앱·스토리지·진화 이력 | runtime 의 요소 계층 | **같은 코드** — runtime 4.80.0 을 `xgen_rsi.base` 로 복사(파일 해시를 `COPY.json` 에 기록, 테스트로 검사) |
+| **harness pipeline** | 21-stage 파이프라인. 사람이 측정하고 릴리스로 고친다 | 고정 커널 K₀ + 하네스 H(𝒦 9종 구성요소). **RRSI 가 모델 계열별로 측정해 채택한 하네스**를 쓴다 |
+| 하네스가 바뀌는 길 | runtime 릴리스 | rsi 릴리스에 든 채택 하네스(`harnesses/` + `lineages.json`). 모델에 맞는 채택 하네스가 없으면 H0 = Agent Geny 와 같은 동작 |
+
+XGEN 서버는 에이전트에 딸린 모든 기능을 **그 에이전트의 패키지**로 다룬다 — 대화 턴, [메모리]·[작업]·[도구]·[앱]·
+[스토리지]·[진화 이력] 화면 API, 예약 작업, 고정본·복제. 그래서 Agent Geny RSI 의 데이터는 처음부터 끝까지 rsi 코드로 다뤄지고,
+두 에이전트의 동작 차이는 harness pipeline 에서만 나온다. 특정 에이전트에 속하지 않는 플랫폼 기능(개인 SSH 연결 테스트,
+범용 LLM 서비스 등)은 XGEN 의 기본 패키지(runtime)를 쓴다.
+
+**언제 무엇을 쓰나**
+
+- **Agent Geny** — 기본. 하네스는 runtime 릴리스로만 바뀐다(사람이 고치고 검증한 것).
+- **Agent Geny RSI** — 고른 모델에 맞춰 **측정으로 채택된 하네스**를 쓰고 싶을 때. 판정에 쓰지 않은 보류 분할에서 점수가 잡음
+  이상으로 오르거나, 같은 점수에서 비용이 줄었다는 기록이 있는 하네스만 패키지에 들어간다. 채택 하네스가 없는 모델에서는 Agent Geny 와
+  같은 동작이다. **2026-10-02 현재 패키지에 든 채택 하네스는 없다** — [결과](#결과-요약).
+
+---
+
+## Geny 의 요소와 RSI
+
+Geny 의 철학은 "에이전트 = 모델 + 요소(기억·작업·도구·앱·스토리지) + 자기 진화" 다. geny-rsi 는 요소를 그대로 두고, 요소를
+**쓰는 방식**(하네스)만 측정해서 고친다. 요소의 내용(사용자 데이터)과 안전장치(권한·거부·샌드박스)는 하네스가 바꿀 수 없다.
+
+| 요소 | 두 에이전트에서 같은 것 | 하네스가 정하는 것(RRSI 편집 대상) | 커널·호스트가 지키는 것(하네스로 못 바꿈) |
+|---|---|---|---|
+| **메모리** | vault·세션(STM)·장기 기억의 저장소와 형식, 기억 도구(`memory_write`·`memory_pin`), 화면 | `memory` 구성요소: 첫 반복에 고정 사실·관련 지식을 주입할지, 슬라이스 끝에 대화를 기록·요약할지. `prompt` 의 기억 안내 블록, `context_mgmt` 의 검색 시간 한도 | 기억 **내용**(사용자 데이터), 공급자 수명(열기·닫기), 턴 끝 증류, 게스트·고정본의 쓰기 차단 |
+| **작업** | 작업 도구(예약·중지·목록), 스케줄러, [작업] 화면. 프롬프트 작업은 그 에이전트의 턴으로 돈다(RSI 에이전트면 RSI 하네스로) | `client_tool` 노출: 작업 도구 스키마를 언제 보이는가 | 실행 주체·권한, 게스트·고정본에서 작업 도구 제외 |
+| **도구** | 내장 도구(파일·Bash·웹), 제작 도구(ForgeTool)·공용 도구, 커넥터 기기 도구, 노드로 붙인 도구 | `client_tool`: 매 호출에 보일 스키마, 앞 턴에 쓴 도구 되살리기, 점진 공개 문, 한 단계의 도구 호출을 순차·병렬로. `skill`: 하네스가 가진 일반 절차 문서(점진 공개) | 도구 구현, 권한·HITL·사용자 거부, 반복 실패 차단, 샌드박스, 등록 전 실행 테스트 |
+| **앱** | 앱 만들기·배포·삭제 도구, 앱 러너, 앱이 쓰는 LLM(에이전트 모델), [앱] 화면 | 앱 도구의 노출(`client_tool`) | 앱 실행·배포·주소, 앱 LLM 정책·한도 |
+| **스토리지** | 에이전트 작업 공간(클라우드 원본 ↔ 러너 세션), 파일 동기화, [스토리지] 화면 | 없다 | 작업 공간 복원·발행, 파일 경로 담장 |
+| **진화 이력** | 자기 진화 도구(WorkflowSelf — 에이전트가 자기 프롬프트·도구·연결을 고침)와 그 기록 | 자기 진화 도구의 노출 | 무엇을 고칠 수 있는지와 기록 |
+
+**두 가지 진화는 다른 축이다.**
+
+| | 자기 진화(진화 이력, 두 에이전트 공통) | 하네스 진화(RRSI, Agent Geny RSI) |
+|---|---|---|
+| 무엇을 바꾸나 | 그 에이전트가 **무엇인가** — 프롬프트·도구·연결 노드(워크플로우) | 턴을 **어떻게 실행하나** — 문맥 관리·프롬프트 조립·루프 결정·도구 노출·절차 |
+| 누가·언제 | 에이전트가 대화 중에, 사용자 요청이나 판단으로 | 제안자 모델이 업무 스위트에서, 오프라인 라운드로 |
+| 채택 기준 | 에이전트의 판단(기록은 [진화 이력]) | 잡음 보정 바닥·비용 규칙·가드를 통과한 측정 |
+| 범위 | 그 에이전트 하나 | 모델 계열 전체(같은 모델을 쓰는 모든 Agent Geny RSI) |
+| 반영 | 즉시(그 워크플로우) | rsi 릴리스(사람 승인·CI) |
+
+하네스 진화는 사용자의 워크플로우·기억·파일을 건드리지 않는다. 자기 진화가 바꾼 워크플로우는 다음 턴부터 같은 하네스로 돈다.
+
+---
+
+## RSI 로 달성하려는 것
+
+**목표: 같은 모델로 더 잘, 더 싸게 — 그리고 그 사실을 기록으로 증명한다.** 하네스(턴 실행 방식)는 모델마다 맞는 모양이 다르다.
+사람이 모델마다 하네스를 고치는 대신, 측정이 허락한 변경만 쌓는다.
+
+- **RRSI — 하네스를 고친다.** 실패 궤적을 분석한 제안자가 하네스 편집을 내고(누설 심사·편집 예산 안에서), 업무 스위트로 잰다.
+  점수가 **잡음 바닥(δ)을 넘어** 오르면 비용 규칙을 보고 채택하고, 띠 안이면 점수·비용·새 구조 가점을 합친 값(Eq.17)이 양수일 때만
+  채택한다 — 비용만 늘리는 편집은 거절된다. 평가에서 한 번도 읽히지 않은 편집과 환경을 사실로 박는 편집은 거른다. 채택은 모델 계열별
+  하네스 계보로 남고, 판정 입력은 전부 기록돼 다시 판정할 수 있다. **운영 반영(패키지)은 따로** — 판정에 쓰지 않은 보류 분할에서 이득이
+  확인된 하네스만 넣는다.
+- **Dream-RSI — 탐색 계산을 아낀다.** 쌓인 탐색 기록을 재생 world 로 써서, 새 생성 없이 탐색 정책(몇 갈래로 나누고 언제 멈출지)
+  후보를 비교한다. 재생에서 이긴 정책도 **실제로 다시 탐색해 RRSI 판정을 통과해야** 승격한다.
+- **무엇을 하지 않나.** 정책(모델) 자체를 학습하지 않는다. 사용자 데이터·권한·안전장치를 바꾸지 않는다. 측정 없이, 사람 승인
+  없이 운영을 바꾸지 않는다.
+
+## harness pipeline 비교 — geny 와 geny-rsi
 
 | | **geny** (기존) | **geny-rsi** (이 저장소) |
 |---|---|---|
@@ -30,7 +94,6 @@ XGEN 에서는 두 에이전트로 나란히 쓴다: **Agent Geny**(`agents/geny
 | 탐색 | 한 번에 한 경로 | branch × attempt 격자, 탐색 정책 π_E 는 **Dream-RSI** 로 개선 |
 | 측정 단위 | 턴 로그 | 궤적 기록(발견 트리) + 정책 토큰 c(τ) — 그대로 재생 world 가 된다 |
 | 쓰는 법 | `AgentTurnExecutor().run(host, **kwargs)` | `GenyRSITurnExecutor().run(host, **kwargs)` 또는 `GenyRSI(...)` |
-| 패키지 | xgen-agent-runtime | xgen-agent-runtime-rsi — **서로 의존하지 않는다** |
 
 ```
 에이전트 A = (π, K₀, H, π_E)
@@ -42,17 +105,23 @@ XGEN 에서는 두 에이전트로 나란히 쓴다: **Agent Geny**(`agents/geny
 
 ---
 
-## 결과 요약 (2026-10-01 · gpt-6-sol · claude-sonnet-5)
+## 결과 요약
+
+**2차 (2026-10-02 · gpt-6-luna · claude-haiku-4-5 · xgen-pro)** — [상세 보고서](docs/reports/2026-10-02-luna-haiku-xgen-pro.md)
 
 | 질문 | 결과(실측) |
 |---|---|
-| 갈아끼울 수 있나 | **실제 모델 응답 재생에서 두 엔진의 요청이 바이트 단위로 같다** — sonnet-5 81/81, gpt-6-sol 77/77 호출(32과제씩), 답·usage·점수 64/64 동일 |
-| 같은 점수인가 | xgen-core: 네 조건 모두 점수 동일(gpt-6-sol 0.919/0.914, sonnet-5 1.000). xgen-hard: 차이는 모두 표준오차 안 |
-| 스스로 나아지나 (RRSI) | gpt-6-sol 6라운드에서 3번 채택했지만 보류 분할에서 H\* 1.000 vs H0 0.997(잡음 안), 토큰 +5%. 두 모델 모두 천장이라 개선을 가릴 수 없다 → 천장 아래 모델(gpt-6-luna·claude-haiku-4-5)과 더 어려운 스위트로 다시 잰다. 실측에서 찾은 결함(측정되지 않은 편집 채택)은 0.2.0 에서 막았다 |
-| 탐색을 더 잘 쓰나 (Dream-RSI) | gpt-6-sol 이 직접 개발한 탐색 정책이 라이브 확인에서 같은 최고점(8/8)을 **시도 25%·토큰 16% 적게** 찾아 RRSI 판정을 통과, 승격 |
+| 갈아끼워도 잃지 않나 | 진화 전 geny-rsi(H0)는 두 모델·두 분할 모두 기존 runtime 과 점수 차이가 잡음 안(luna 0.919 vs 0.906, haiku 0.826 vs 0.810, evolve) |
+| 점수가 오르나 (RRSI) | luna: 5라운드 2번 채택, evolve 0.919 → 0.948(δ 0.025 위). 하지만 **보류 분할(k=4)에서는 H\* 0.911 vs H0 0.907 vs geny 0.916 — 잡음 안**, 토큰 +26% → 패키지에 넣지 않음 |
+| 비용이 주나 (RRSI) | haiku: 같은 점수대에서 토큰 −10.6% 편집 채택(무효 처리한 실행에선 −45.8%). 진화는 2/5 라운드에서 API 크레딧 소진으로 중단 — 재개 후 갱신 |
+| 측정·가드가 일하나 | 비용만 늘린 후보 7/10 자동 거절(luna). 실측 중 결함 3건을 찾아 막음: 빈 분석, **평가 환경을 사실로 박는 편집**(운영에서 틀림), 장애 시행의 0점 기록 |
+| 탐색을 아끼나 (Dream-RSI) | gpt-6-sol 이 개발한 luna 탐색 정책: 같은 최고점에 시도 −36%, 그러나 토큰 +0.16% → 확인 판정이 승격을 막음 |
 
+**1차 (2026-10-01 · gpt-6-sol · claude-sonnet-5)** — [상세 보고서](docs/reports/2026-10-01-geny-vs-geny-rsi.md): 실제 응답 재생에서 두 엔진의
+요청이 바이트 단위로 같음(81/81, 77/77). 두 모델 모두 천장(0.9~1.0)이라 하네스 개선을 가릴 수 없었음. gpt-6-sol Dream 정책은 시도 25%·토큰 16% 절감으로 승격.
 
-자세한 수치·방법·한계는 [상세 비교 보고서](docs/reports/2026-10-01-geny-vs-geny-rsi.md).
+**정리:** geny-rsi 가 지금 확실히 하는 일은 **손해 없이 갈아끼우고, 측정이 허락한 변경만 남기는 것**이다. 보류 분할에서 확인된 점수·비용 개선은
+아직 없다. 평가 호스트에 코드 실행 도구가 없다는 점(운영과 다름)과 작은 보류 분할(8과제)이 가장 큰 한계다.
 
 ---
 
@@ -63,7 +132,7 @@ XGEN 에서는 두 에이전트로 나란히 쓴다: **Agent Geny**(`agents/geny
 GitHub Release 의 wheel 로 설치한다(PyPI 미사용). 이 패키지 하나면 된다 — xgen-agent-runtime 은 필요 없다.
 
 ```bash
-pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.3.0/xgen_agent_runtime_rsi-0.3.0-py3-none-any.whl"
+pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.4.0/xgen_agent_runtime_rsi-0.4.0-py3-none-any.whl"
 ```
 
 ### 라이브러리로 — `PipelinePresets` 와 같은 사용감
@@ -110,8 +179,8 @@ out = executor.run(host, **kwargs)
 ### 하네스를 진화시키기
 
 ```bash
-rsi suite build ./suites/xgen-hard --suite xgen-hard
-rsi evolve init runs/evo --suite ./suites/xgen-hard --policy policy.json --config rrsi.json
+rsi suite build ./suites/xgen-pro --suite xgen-pro
+rsi evolve init runs/evo --suite ./suites/xgen-pro --policy policy.json --config rrsi.json
 rsi evolve run runs/evo                  # H0 기준선 → δ 보정 → RRSI 라운드
 rsi evolve export runs/evo ./H_star      # 채택된 하네스 → XGEN_RSI_HARNESS_DIR=./H_star
 ```
@@ -204,7 +273,8 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 ## 문서
 
-- [상세 비교 보고서](docs/reports/2026-10-01-geny-vs-geny-rsi.md) — geny vs geny-rsi, 두 모델, 동등성·진화·탐색 실측
+- [2차 보고서](docs/reports/2026-10-02-luna-haiku-xgen-pro.md) — 천장 아래 모델(gpt-6-luna·claude-haiku-4-5) × xgen-pro, 진화·보류 분할·탐색 실측
+- [1차 보고서](docs/reports/2026-10-01-geny-vs-geny-rsi.md) — gpt-6-sol·claude-sonnet-5, 재생 동등성·진화·탐색 실측
 - [사용 가이드](docs/GUIDE.md) — 라이브러리 API, 서버 설정, 하네스 형식, 평가·진화·탐색 명령, 실험 재현
 - [설계 문서 지도](docs/README.md) — 논문 분석, 수식 정본, 기존 런타임 조사, 융합 원칙, 아키텍처, I/O 호환, 평가, 위험
 - [계획](docs/PLAN.md) — 단계 계획, 결정 항목, 구현 현황

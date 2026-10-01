@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check src/ tests/ experiments/
+      - run: ruff check src/ tests/ experiments/ tools/
 
   type-check:
     name: Type check (rsi_math strict)
