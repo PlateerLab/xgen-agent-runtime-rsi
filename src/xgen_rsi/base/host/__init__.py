@@ -1,0 +1,20 @@
+"""xgen_rsi.base.host — host-agnostic agent-turn executor.
+
+Extracted from ``agent_geny.AgentGenyNode.execute`` so every entry point runs
+the SAME turn logic and can never diverge. The host supplies infrastructure
+through :class:`HostServices`; the executor supplies the (identical)
+orchestration.
+
+This layer lives INSIDE the runtime (not a separate package): the engine core
+stays pure, and this submodule holds the turn orchestration + the ``HostServices``
+protocol the host implements. ``ServerHostServices`` lives in xgen-workflow.
+Every module here is import-clean of xgen-workflow — the product coupling is
+injected via the host.
+"""
+
+from __future__ import annotations
+
+from xgen_rsi.base.host.host import CliRuntime, HostServices
+
+__all__ = ["HostServices", "CliRuntime"]
+__version__ = "0.1.0"

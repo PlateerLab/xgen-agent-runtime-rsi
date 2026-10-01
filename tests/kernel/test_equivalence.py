@@ -15,10 +15,10 @@ import re
 from typing import Any, Dict
 
 import pytest
-from xgen_agent_runtime.host import runner as runner_mod
-from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor
 
 from tests.kernel.fakes import EchoTool, FakeHost, ScriptedClient, error_step, text_step, tool_step
+from xgen_rsi.base.host import runner as runner_mod
+from xgen_rsi.base.host.turn_executor import AgentTurnExecutor
 from xgen_rsi.turn_executor import GenyRSITurnExecutor
 
 _TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}:\d{2})?")

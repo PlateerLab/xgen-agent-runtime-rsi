@@ -1,14 +1,13 @@
 """턴 조립 — 호스트 계약(26단계)으로 한 턴의 계획(:class:`TurnPlan`)을 만든다. geny-rsi 의 자체 사본.
 
-기존 엔진 geny(``xgen_agent_runtime.host.turn_executor.AgentTurnExecutor``)는 같은 조립을 자기 ``run()`` 안에서 한다.
-geny-rsi 는 런타임을 고치지 않고 **같은 입력 계약**(``run(host, **kwargs)``)을 지키기 위해 그 조립을 이 패키지에 옮겨
-두고, 실행 코어만 자기 것(:class:`xgen_rsi.kernel.executor.RSITurnExecutor`)을 쓴다. 두 엔진이 같은 요청을 보내는지는
-``tests/kernel/test_equivalence.py``(각본 모델)와 ``experiments/replay_equivalence.py``(실제 모델 응답 재생)가 잰다 —
-런타임의 조립이 바뀌어 갈라지면 그 테스트가 실패한다.
+21-stage 엔진 geny(사본 ``xgen_rsi.base.host.turn_executor.AgentTurnExecutor``)는 같은 조립을 자기 ``run()`` 안에서 한다.
+geny-rsi 는 **같은 입력 계약**(``run(host, **kwargs)``)을 지키기 위해 그 조립을 떼어 이 모듈에 두고, 실행 코어만 자기 것
+(:class:`xgen_rsi.kernel.executor.RSITurnExecutor`)을 쓴다. 두 엔진이 같은 요청을 보내는지는 ``tests/kernel/test_equivalence.py``
+(각본 모델)와 ``experiments/replay_equivalence.py``(실제 모델 응답 재생)가 잰다.
 
-원본: PlateerLab/xgen-agent-runtime ``src/xgen_agent_runtime/host/turn_executor.py`` (v4.79.0 의 ``assemble_turn``·
-``TurnPlan``·``SystemPromptParts``. 조립 본체는 v4.75.0·v4.80.0 의 ``AgentTurnExecutor.run`` 과 동작이 같다), Apache License 2.0.
-바꾼 것: 실행 엔진 선택 코드와 21-stage 실행 경로를 뺐다.
+원본: PlateerLab/xgen-agent-runtime ``host/turn_executor.py`` (v4.79.0 의 ``assemble_turn``·``TurnPlan``·``SystemPromptParts``.
+조립 본체는 v4.80.0 의 ``AgentTurnExecutor.run`` 과 동작이 같다), Apache License 2.0. 바꾼 것: 실행 엔진 선택 코드와 21-stage 실행
+경로를 뺐고, import 는 전부 사본 ``xgen_rsi.base`` 를 본다(xgen-agent-runtime 을 import 하지 않는다).
 """
 
 from __future__ import annotations
@@ -18,19 +17,19 @@ import os
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from xgen_agent_runtime.host import local_folders as _local_folders
+from xgen_rsi.base.host import local_folders as _local_folders
 
 # 본체가 쓰는 모듈-수준 상수/헬퍼(항상 실행) — 서버에서 resolve. lazy 트리거라
 # 순환 없음(execute 가 turn_executor 를 지연 import). Phase 2 에서 패키지로 이전.
-from xgen_agent_runtime.host._constants import (  # noqa: E402
+from xgen_rsi.base.host._constants import (  # noqa: E402
     _CLI_BACKENDS,
     SELF_EVOLUTION_PROMPT_BLOCK,
     _self_evolution_policy,
     cli_tool_naming_note,
     default_prompt,
 )
-from xgen_agent_runtime.host.tool_exposure import registers_core, sends_every_schema
-from xgen_agent_runtime.host.turn_input import TurnInput
+from xgen_rsi.base.host.tool_exposure import registers_core, sends_every_schema
+from xgen_rsi.base.host.turn_input import TurnInput
 
 #: 턴 안에서 MCP 도구 목록을 다시 읽지 않는 CLI 백엔드 — 계층 노출(문 뒤에 숨긴 도구)을 쓸 수 없다.
 #:
@@ -114,7 +113,7 @@ def _memory_block_for(host: Any, workflow_id: str, *, write_available: Optional[
     ``write_available`` 이 None(CLI 브릿지처럼 registry 를 여기서 못 보는 경로)이면 호스트의
     선택 훅 ``memory_write_available(workflow_id)`` 에 묻는다. 훅이 없으면 예전대로 쓰기 블록.
     """
-    from xgen_agent_runtime.host._constants import MEMORY_PROMPT_BLOCK, MEMORY_READONLY_PROMPT_BLOCK
+    from xgen_rsi.base.host._constants import MEMORY_PROMPT_BLOCK, MEMORY_READONLY_PROMPT_BLOCK
 
     if write_available is None:
         probe = getattr(host, "memory_write_available", None)
@@ -235,7 +234,7 @@ class TurnPlan:
 
     @property
     def max_continuation_slices(self) -> int:
-        from xgen_agent_runtime.host.runner import DEFAULT_MAX_CONTINUATION_SLICES
+        from xgen_rsi.base.host.runner import DEFAULT_MAX_CONTINUATION_SLICES
 
         return int(self.kwargs.get("max_continuation_slices", DEFAULT_MAX_CONTINUATION_SLICES))
 
@@ -254,11 +253,11 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     호출자가 정리할 수 있게.
     """
     node_name = kwargs.get("node_name") or ""
-    from xgen_agent_runtime import PipelineState
-    from xgen_agent_runtime.core.shared_keys import SharedKeys
-    from xgen_agent_runtime.host.memory import history_messages
-    from xgen_agent_runtime.host.rag import collect_rag
-    from xgen_agent_runtime.host.tools import adapt_tools
+    from xgen_rsi.base import PipelineState
+    from xgen_rsi.base.core.shared_keys import SharedKeys
+    from xgen_rsi.base.host.memory import history_messages
+    from xgen_rsi.base.host.rag import collect_rag
+    from xgen_rsi.base.host.tools import adapt_tools
 
     turn_input = TurnInput.from_raw(kwargs.get("text"))
     text = turn_input.text
@@ -274,7 +273,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     # (temperature: OpenAI/vLLM/Google 0~2, Anthropic/Claude Code 0~1.)
     # provider 런타임 에러 매핑(geny-executor 내부)은 executor 측 과제 — 여기서는
     # 노드에서 아는 값만 실행 전에 막는다.
-    from xgen_agent_runtime.host.param_validator import validate_agent_params
+    from xgen_rsi.base.host.param_validator import validate_agent_params
 
     param_error = validate_agent_params(provider, temperature=kwargs.get("temperature", 0.7))
     if param_error:
@@ -447,7 +446,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         # preload 된 과거 대화는 내장 메모리의 STM 기록/대화 아카이브
         # 대상에서 제외 — 두 전략의 워터마크를 preload 길이로 초기화
         # (없으면 매 턴 과거 이력이 통째로 재기록되어 중복 폭증).
-        from xgen_agent_runtime.host.conversation_archive import (
+        from xgen_rsi.base.host.conversation_archive import (
             _ARCHIVED_KEY,
             STM_RECORDED_KEY,
         )
@@ -522,7 +521,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     if _tools_reach_model and kwargs.get("system_prompt") != "":
         # 왕복 수가 곧 비용이다 — 병렬 호출·일괄 스크립트·출력 최소화 원칙.
         # 사용자가 시스템 프롬프트를 명시적으로 비운 턴에는 붙이지 않는다.
-        from xgen_agent_runtime.host._constants import EFFICIENCY_PROMPT_BLOCK
+        from xgen_rsi.base.host._constants import EFFICIENCY_PROMPT_BLOCK
 
         system_prompt = _sp.add("efficiency", EFFICIENCY_PROMPT_BLOCK)
     # ── 자기진화(self-evolution) 판정 ────────────────────────────────
@@ -537,10 +536,10 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
 
     _memory_block_pending = False
     if bool(kwargs.get("enable_memory", True)):
-        from xgen_agent_runtime.host._constants import (
+        from xgen_rsi.base.host._constants import (
             MEMORY_AUTO_PROMPT_BLOCK,
         )
-        from xgen_agent_runtime.host.memory_tools import build_memory_tools
+        from xgen_rsi.base.host.memory_tools import build_memory_tools
 
         memory_provider = host.build_memory_provider(
             str(kwargs.get("workflow_id") or ""), interaction_id
@@ -556,7 +555,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
             )
         elif memory_provider is not None:
             try:
-                from xgen_agent_runtime.tools import ToolRegistry
+                from xgen_rsi.base.tools import ToolRegistry
 
                 if registry is None:
                     registry = ToolRegistry()
@@ -586,7 +585,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
             import shutil as _shutil
             import tempfile as _tempfile
 
-            from xgen_agent_runtime.tools import ToolRegistry
+            from xgen_rsi.base.tools import ToolRegistry
 
             if registry is None:
                 registry = ToolRegistry()
@@ -697,7 +696,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     # 불필요), 내장 도구 조립과 무관해야 한다. 모든 provider 가 같은 등록기를 지난다.
     if _tools_reach_model and _se_allowed:
         try:
-            from xgen_agent_runtime.tools import ToolRegistry as _ToolRegistry
+            from xgen_rsi.base.tools import ToolRegistry as _ToolRegistry
 
             if registry is None:
                 registry = _ToolRegistry()
@@ -727,7 +726,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     # 숨긴 도구로 가는 입구(ToolSearch·SelfExtendGuide) — 파이프라인 조립도 같은 함수를
     # 부르지만, CLI 는 레지스트리를 파이프라인에 넘기지 않으므로 여기서 세운다.
     if _tools_reach_model:
-        from xgen_agent_runtime.host.runner import ensure_surface_entrances
+        from xgen_rsi.base.host.runner import ensure_surface_entrances
 
         ensure_surface_entrances(registry)
 
@@ -747,7 +746,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         and provider != "codex"
         and bool(kwargs.get("memory_distill", True))
     ):
-        from xgen_agent_runtime.host.distill import DistillSpec
+        from xgen_rsi.base.host.distill import DistillSpec
 
         # claude_code 는 인증 채널 해석을 노드가 소유(_build_cli_runtime
         # 규약) — 구독(setup_token) 모드도 증류가 돌도록 그대로 전달.
@@ -796,8 +795,8 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         # 돌지 않으므로 레지스트리는 파이프라인이 아니라 표면 객체로 간다. 같은 레지스트리·
         # 같은 도구 컨텍스트·같은 턴 상태 — SDK 경로와 도구가 **같다**.
         if registry is not None and len(registry) and _tools_reach_model:
-            from xgen_agent_runtime.host.tool_surface import TurnToolSurface
-            from xgen_agent_runtime.tools.catalog import deferred_catalog_text
+            from xgen_rsi.base.host.tool_surface import TurnToolSurface
+            from xgen_rsi.base.tools.catalog import deferred_catalog_text
 
             _tool_surface = TurnToolSurface(
                 registry=registry,
@@ -853,7 +852,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     # 업무 용어는 보지 않고 크기/파일·디렉터리 수/UTF-8/명시적 경로 참조만 본다.
     # 실패하거나 애매하면 기존 agent loop 로 돌아간다. 모든 provider 가 같은 입력을 받는다
     # (CLI 도 같은 도구 컨텍스트·같은 턴 상태를 쓰므로 읽은 파일 장부가 이어진다).
-    from xgen_agent_runtime.host.workspace_fast_path import (
+    from xgen_rsi.base.host.workspace_fast_path import (
         WORKSPACE_FAST_PATH_SETTING,
         flag_enabled,
         prepare_workspace_fast_path,
@@ -922,9 +921,9 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
         try:
             import asyncio as _asyncio
 
-            from xgen_agent_runtime.host.referenced_files import collect as _collect_refs
-            from xgen_agent_runtime.tools.built_in._file_witness import WITNESSED_KEY
-            from xgen_agent_runtime.tools.fs import LocalFS, RunnerFS
+            from xgen_rsi.base.host.referenced_files import collect as _collect_refs
+            from xgen_rsi.base.tools.built_in._file_witness import WITNESSED_KEY
+            from xgen_rsi.base.tools.fs import LocalFS, RunnerFS
 
             _ref_fs = None
             if _sandbox is not None:
@@ -957,7 +956,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     budget_window = 0
     clamped = False
     if provider not in _CLI_BACKENDS:
-        from xgen_agent_runtime.host.context_budget import (
+        from xgen_rsi.base.host.context_budget import (
             fit_input_to_budget,
             resolve_window,
         )
@@ -1035,7 +1034,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     # 첨부는 워크스페이스 상대로 들어오므로, 기준을 모델에게 맡기면 틀린 자리를 만든다
     # (2026-09-21 실측: 작업 폴더가 …/<wf>/workspace 인데 …/<wf>/uploads 로 읽으려다
     # 샌드박스 가드에 막혔다). 기준을 아는 쪽은 턴을 여는 이곳 하나다.
-    from xgen_agent_runtime.host.attachment_paths import (
+    from xgen_rsi.base.host.attachment_paths import (
         absolutize_attachments,
         hydrate_sandbox_images,
     )
@@ -1079,7 +1078,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
     # 않는다. workflow storage가 있는 턴만 host가 파일 수명·보존을
     # 소유하고, Pipeline의 공개 입력/출력에는 아무 필드도 추가하지 않는다.
     rollout_path = None
-    from xgen_agent_runtime.host.rollouts import (
+    from xgen_rsi.base.host.rollouts import (
         ROLLOUT_ENABLED_SETTING,
         allocate_rollout_path,
     )
@@ -1161,7 +1160,7 @@ def assemble_turn(host: Any, kwargs: Dict[str, Any], resources: Dict[str, Any]) 
 
     def _cancelled() -> bool:
         try:
-            from xgen_agent_runtime.host.cancel_context import is_cancelled
+            from xgen_rsi.base.host.cancel_context import is_cancelled
 
             return is_cancelled(interaction_id, response_io_id, cancel_check=_extra_cancel)
         except Exception:  # noqa: BLE001

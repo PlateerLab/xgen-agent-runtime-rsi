@@ -1,0 +1,874 @@
+"""Claude Code CLI backend.
+
+Wraps Anthropic's ``claude`` command-line agent as a :class:`BaseClient`.
+Production prod-grade backend — same canonical APIRequest/APIResponse
+contract as every vendor SDK, just routing through a subprocess.
+
+Authentication
+--------------
+``claude`` reads credentials from one of:
+  - ``ANTHROPIC_API_KEY`` env var (passed by this client when ``api_key=`` is set)
+  - Subscription auth saved by ``claude auth`` / ``claude setup-token``
+  - ``apiKeyHelper`` declared in a ``--settings`` file
+
+Which channel drives a given client is declared via ``auth_mode=``
+(``'api_key' | 'oauth' | 'setup_token' | 'auto'``); it decides whether
+``--bare`` is emitted. ``'auto'`` resolves from the client's own
+``api_key`` — never from the host process env, which is scrubbed before
+spawn and historically lied about the child's credential reality
+(PR #868).
+
+This client never forwards the host's full env — only an explicit whitelist
+plus the credentials it was told to expose.
+
+Tool execution
+--------------
+When ``state.llm_client`` is a Claude Code client, the CLI executes its
+own built-in tools (Read/Write/Bash/MCP) inside the spawned subprocess.
+Geny's tool stage detects this via capabilities (``is_subprocess=True &&
+supports_tools=True && requires_workspace=True``) and skips host-side
+tool dispatch — see ``stages/s10_tool``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+import asyncio
+import contextlib
+import logging
+import os
+from contextlib import aclosing
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
+
+from xgen_rsi.base.core.config import ModelConfig
+from xgen_rsi.base.core.errors import APIError, ErrorCategory
+from xgen_rsi.base.llm_client._cli_runtime import (
+    CLIAuthFailed,
+    CLIBinaryNotFound,
+    CLIProcessRunner,
+    CLIProtocolError,
+    CLIResult,
+    CLITimeout,
+    aiter_bytes,
+    detect_binary,
+)
+from xgen_rsi.base.llm_client.base import BaseClient, ClientCapabilities
+from xgen_rsi.base.llm_client.translators._cli import (
+    StreamJsonAccumulator,
+    assemble_response_from_stream_json,
+    build_stream_json_stdin,
+    messages_have_images,
+    claude_code_argv,
+    resolve_auth_channel,
+    parse_json_output_to_response,
+)
+from xgen_rsi.base.llm_client.types import APIRequest, APIResponse
+
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["ClaudeCodeCLIClient"]
+
+
+#: Anchored stderr phrases that indicate an authentication failure.
+#:
+#: Deliberately *specific*: the pre-2.2.0 heuristic matched bare
+#: ``'auth' and 'fail'`` substrings anywhere in stderr, so any MCP/tool
+#: noise mentioning e.g. an "oauth-helper failed to start" was
+#: misclassified as CLI_AUTH_FAILED — a fatal, non-retryable category —
+#: when the actual failure was a transient protocol error. Only phrases
+#: the CLI itself emits on credential problems belong here.
+_AUTH_FAILURE_PHRASES = (
+    "not authenticated",
+    "unauthorized",
+    "authentication_failed",
+    "invalid api key",
+)
+
+
+def _classify_cli_result(result: CLIResult, *, cli_version: str = "") -> APIError:
+    """Heuristic mapping of CLI exit codes / stderr → APIError category.
+
+    ``cli_version`` (when the caller has completed the version handshake)
+    is appended to the message — all four 2.1.x incidents were version
+    skew, and post-hoc diagnosis needs that one fact recorded at the
+    moment of failure, not reconstructed from deploy logs.
+    """
+    stderr = result.stderr.decode("utf-8", errors="replace").lower()
+    suffix = f" [cli_version={cli_version}]" if cli_version else ""
+    if any(phrase in stderr for phrase in _AUTH_FAILURE_PHRASES):
+        return APIError(
+            f"Claude Code CLI auth failed (exit {result.returncode}): {stderr[:300]}{suffix}",
+            category=ErrorCategory.CLI_AUTH_FAILED,
+        )
+    if "permission" in stderr and ("denied" in stderr or "deny" in stderr or "blocked" in stderr):
+        return APIError(
+            f"Claude Code CLI permission denied: {stderr[:300]}{suffix}",
+            category=ErrorCategory.CLI_PERMISSION_DENIED,
+        )
+    return APIError(
+        f"Claude Code CLI exited with code {result.returncode}: {stderr[:300]}{suffix}",
+        category=ErrorCategory.CLI_PROTOCOL_ERROR,
+    )
+
+
+def _process_alive(proc: Any) -> bool:
+    """Is this child still running, really?
+
+    ``asyncio.subprocess.Process.returncode`` is bookkeeping: it stays None
+    until the event loop reaps the child. A process that already exited can
+    therefore look alive indefinitely. Ask the kernel instead.
+    """
+    if getattr(proc, "returncode", None) is not None:
+        return False
+    pid = getattr(proc, "pid", None)
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else — still alive
+    except OSError:
+        return False
+    return True
+
+
+def _thinking_off(request: Optional[APIRequest]) -> bool:
+    return request is not None and getattr(request, "thinking_level", None) == "off"
+
+
+class ClaudeCodeCLIClient(BaseClient):
+    """Subprocess-backed Claude Code client."""
+
+    provider = "claude_code_cli"
+    #: 구독 채널에서 CLAUDE_CODE_SIMPLE 을 걷어냈다는 경고는 **프로세스당 한 번**.
+    #: 턴마다 찍으면 로그가 잠기고, 그러면 아무도 안 읽는다.
+    _simple_env_warned = False
+    capabilities = ClientCapabilities(
+        supports_thinking=True,
+        supports_tools=True,
+        supports_streaming=True,
+        supports_tool_choice=False,
+        supports_stop_sequences=False,
+        supports_top_k=False,
+        supports_system_prompt=True,
+        supports_structured_output=True,
+        supports_session_continuity=True,
+        supports_mcp_passthrough=True,
+        supports_budget_limit=True,
+        supports_token_usage=True,
+        supports_cost_usage=True,
+        is_subprocess=True,
+        requires_workspace=True,
+        streaming_granularity="token",
+        drops=(
+            "tool_choice",
+            "stop_sequences",
+            "top_k",
+            "temperature",
+            "top_p",
+            "max_tokens",
+        ),
+    )
+
+    #: Wall-clock cap for the one-time ``--version`` handshake. Short on
+    #: purpose: the probe must never meaningfully delay the first real
+    #: call, and a hung probe degrades to ``cli_version="unknown"``.
+    _VERSION_PROBE_TIMEOUT_S = 10.0
+
+    def __init__(
+        self,
+        *,
+        binary_path: Optional[str] = None,
+        workspace_dir: Optional[str] = None,
+        api_key: str = "",
+        auth_mode: str = "auto",
+        settings_path: Optional[str] = None,
+        bare_mode: bool = True,
+        max_budget_usd: Optional[float] = None,
+        default_permission_mode: str = "default",
+        mcp_config: Any = None,
+        allow_tools: Sequence[str] = (),
+        disallow_tools: Sequence[str] = (),
+        extra_args: Sequence[str] = (),
+        timeout_s: float = 300.0,
+        env_extras: Optional[Dict[str, str]] = None,
+        event_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
+        strict_wire: bool = False,
+        runner_factory: Optional[Callable[..., CLIProcessRunner]] = None,
+        session_hint: Optional[Dict[str, Any]] = None,
+        prewarm_spawn: Optional[bool] = None,
+    ) -> None:
+        """Construct a Claude Code CLI client.
+
+        2.2.0 boundary-hardening kwargs (audit §2.2/§2.3, Tier 1-1/2):
+
+        ``auth_mode``
+            ``'api_key' | 'oauth' | 'setup_token' | 'auto'``. Declares
+            which credential channel the CLI should be driven through;
+            replaces the deleted process-env sniff in the argv builder
+            (which read the *parent* env — a variable the scrubbed child
+            never necessarily sees; PR #868 history). ``'auto'`` resolves
+            to ``api_key`` iff ``api_key=`` is non-empty, else the
+            subscription (OAuth) path.
+        ``strict_wire``
+            When True, any unknown / malformed stream-json line fails the
+            call with ``CLI_PROTOCOL_ERROR`` instead of being tolerated.
+            Meant for CI canaries that should turn the next wire drift
+            into a failing test *before* release — never for prod, where
+            tolerate-and-report is the right posture.
+        ``runner_factory``
+            Optional ``Callable[..., CLIProcessRunner]`` receiving
+            ``binary=``, ``cwd=``, ``env_extras=``, ``timeout_s=``.
+            The supported seam for hosts that wrap process spawning
+            (a host-managed process sandbox) — absorbs the
+            ``CLIProcessRunner._spawn`` monkey-patch that pinned hosts to
+            2.1.0. The version-handshake probe routes through the same
+            factory so the recorded version matches the binary that
+            actually runs.
+        ``session_hint``
+            Default ``{"session_id": ..., "resume": bool}`` applied to
+            requests built through the high-level
+            ``create_message`` / ``create_message_stream`` surface
+            (which had no way to carry one — making
+            ``supports_session_continuity=True`` an empty promise).
+            Hosts update it between turns via
+            ``client.configure(session_hint=...)``. A per-request
+            ``APIRequest.session_hint`` still wins.
+        """
+        super().__init__(
+            api_key=api_key,
+            base_url=None,
+            default_headers=None,
+            event_sink=event_sink,
+        )
+        # Binary resolution.
+        # - When the caller passes an explicit ``binary_path`` we respect
+        #   their choice: if it points to a missing file we surface the
+        #   error at send time (CLI_NOT_FOUND) rather than silently using
+        #   a different ``claude`` on PATH.
+        # - When no override is given we try CLAUDE_CODE_BINARY then
+        #   shutil.which("claude").
+        if binary_path:
+            self._binary = detect_binary("claude", binary_path) or ""
+        else:
+            env_override = os.environ.get("CLAUDE_CODE_BINARY", "")
+            self._binary = (
+                (detect_binary("claude", env_override) if env_override else None)
+                or detect_binary("claude", None)
+                or ""
+            )
+        self._workspace_dir = workspace_dir
+        self._auth_mode = auth_mode
+        self._settings_path = settings_path
+        self._bare_mode = bare_mode
+        self._max_budget_usd = max_budget_usd
+        self._default_permission_mode = default_permission_mode
+        self._mcp_config = mcp_config
+        self._allow_tools = tuple(allow_tools)
+        self._disallow_tools = tuple(disallow_tools)
+        self._extra_args = tuple(extra_args)
+        self._timeout_s = timeout_s
+        self._extra_env: Dict[str, str] = dict(env_extras) if env_extras else {}
+        self._strict_wire = strict_wire
+        self._runner_factory = runner_factory
+        self._session_hint: Optional[Dict[str, Any]] = dict(session_hint) if session_hint else None
+        #: ``None`` = handshake not attempted yet; ``"unknown"`` = attempted
+        #: and failed (never retried — one probe per client instance).
+        self._cli_version_value: Optional[str] = None
+        # Hot-spare prewarm (TTFT program 2.50.0, finding C1): after a
+        # streamed turn, the NEXT process is booted in the background so
+        # the following turn skips Node boot + auth + MCP startup. Env
+        # override GENY_CLI_PREWARM=0|1 wins over the constructor value;
+        # default on. See _schedule_spare / _take_spare.
+        if prewarm_spawn is None:
+            prewarm_spawn = os.environ.get("GENY_CLI_PREWARM", "1").strip() not in (
+                "0",
+                "false",
+                "off",
+            )
+        self._prewarm_spawn = bool(prewarm_spawn)
+        self._spare: Optional[Dict[str, Any]] = None
+
+    # ───────────────────────────────────────── hot-spare prewarm (C1) ─
+
+    #: How long an unused spare may idle before it is reaped. Bounds the
+    #: resident cost to sessions active within the window; Geny's idle
+    #: monitor evicts whole sessions long after this anyway.
+    _SPARE_TTL_S = 90.0
+
+    def _take_spare(self, argv: List[str], request: Optional[APIRequest] = None) -> Optional[Any]:
+        """Claim the hot spare for *argv*, or None when it doesn't match.
+
+        The spare is only valid for an IDENTICAL argv (model, MCP config,
+        session resume flags, permissions — everything). Any drift means
+        the prewarmed process was booted with stale config: discard it
+        and spawn fresh.
+
+        It must also still be ALIVE, and ``returncode`` is not enough to
+        know that. It is only set once asyncio has reaped the child; a
+        process that exited without the transport noticing keeps
+        ``returncode is None`` forever, so a corpse reads as a healthy
+        spare. The turn then hands its prompt to a dead pipe and waits —
+        which is exactly what happened in production: the CLI started,
+        listed its tools, exited, and every subsequent turn stalled until a
+        watchdog abandoned it. Turning the prewarm off made the same
+        session answer in 11 s.
+
+        ``kill(pid, 0)`` costs a syscall and answers the question the
+        bookkeeping cannot.
+        """
+        spare = self._spare
+        if spare is None:
+            return None
+        self._spare = None
+        expire_task = spare.get("expire")
+        if expire_task is not None:
+            expire_task.cancel()
+        proc = spare["proc"]
+        # 생각 끄기는 argv 가 아니라 env 라 argv 만으로는 같은지 모른다 — 함께 본다.
+        if (
+            spare["argv"] != list(argv)
+            or spare.get("thinking_off", False) != _thinking_off(request)
+            or not _process_alive(proc)
+        ):
+            self._discard_spare_proc(spare)
+            return None
+        return proc
+
+    def _discard_spare_proc(self, spare: Dict[str, Any]) -> None:
+        """Kill a spare's process tree in the background (best-effort)."""
+        proc = spare["proc"]
+        runner = spare["runner"]
+        if proc.returncode is not None:
+            return
+        try:
+            task = asyncio.get_running_loop().create_task(runner._kill_tree(proc))
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        except RuntimeError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+
+    async def _schedule_spare(self, argv: List[str], request: Optional[APIRequest] = None) -> None:
+        """Boot the NEXT turn's process right after this turn's tokens.
+
+        Semantics are identical to today's one-shot mode — the spare
+        still receives the FULL flattened history on stdin at use time,
+        so history rewrites (compaction, deletes) can never diverge from
+        what the model sees. Only the boot cost (Node interpreter, auth
+        resolution, MCP server startup) is paid ahead of the turn.
+
+        The spawn is awaited INLINE (before the terminal
+        ``message_complete`` — every token has already streamed, so the
+        ~15ms fork is invisible) rather than in a background task: on
+        Python 3.11/3.12, cancelling a task inside
+        ``create_subprocess_exec`` blocks on child exit in the
+        transport's cleanup path, which wedged event-loop teardown
+        (pytest-asyncio ``_cancel_all_tasks`` hung CI for exactly this).
+        Only the pure-sleep expiry timer runs as a task — it cancels
+        cleanly everywhere.
+        """
+        if not self._prewarm_spawn or self._spare is not None:
+            return
+        argv_snapshot = list(argv)
+        try:
+            runner = self._make_runner(request=request)
+            proc, _t0 = await runner._spawn(argv_snapshot)
+        except Exception:  # noqa: BLE001 — prewarm is best-effort
+            logger.debug("cli prewarm: spawn failed", exc_info=True)
+            return
+        if proc.returncode is not None:
+            return  # died at birth — nothing to keep
+        entry: Dict[str, Any] = {
+            "proc": proc,
+            "argv": argv_snapshot,
+            "runner": runner,
+            "thinking_off": _thinking_off(request),
+        }
+
+        async def _expire() -> None:
+            try:
+                await asyncio.sleep(self._SPARE_TTL_S)
+            except asyncio.CancelledError:
+                # Loop teardown cancelled the timer — still reap the spare
+                # so it isn't orphaned (audit L3: the old ``return`` here
+                # leaked the process when the loop died while idle).
+                if self._spare is entry:
+                    self._spare = None
+                with contextlib.suppress(ProcessLookupError):
+                    if proc.returncode is None:
+                        proc.kill()
+                return
+            if self._spare is entry:
+                self._spare = None
+                await runner._kill_tree(proc)
+
+        entry["expire"] = asyncio.create_task(_expire())
+        self._spare = entry
+
+    async def aclose(self) -> None:
+        """Reap any idle hot spare (audit L3).
+
+        ``Pipeline.aclose`` calls this when a session ends so the
+        prewarmed ``claude`` subprocess (+ its MCP children) is killed
+        immediately instead of lingering until the 90s TTL — or, if the
+        loop is being torn down, forever."""
+        spare = self._spare
+        self._spare = None
+        if spare is None:
+            return
+        expire = spare.get("expire")
+        if expire is not None:
+            expire.cancel()
+        proc = spare["proc"]
+        if proc.returncode is None:
+            try:
+                await spare["runner"]._kill_tree(proc)
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+
+    # ─────────────────────────────────────────────────────── helpers ─
+
+    #: "맥락 없이 시작" 스위치. **``--bare`` 와 같은 스위치다** — 별개의 우회로가
+    #: 아니다(``claude --help``: "Minimal mode: … Sets CLAUDE_CODE_SIMPLE=1.
+    #: Anthropic auth is strictly ANTHROPIC_API_KEY or apiKeyHelper via
+    #: --settings (OAuth and keychain are never read)").
+    #:
+    #: 그러니 이 env 는 **api_key 채널에서만** 살아 있을 수 있다. 구독
+    #: (setup_token/oauth) 턴에 켜면 CLI 가 자격증명을 아예 읽지 않는다 —
+    #: 4.18.0 이 정확히 그렇게 프로드의 모든 대화를 죽였다. 실측(2026-09-09, CLI
+    #: 2.1.236):
+    #:
+    #:     CLAUDE_CODE_OAUTH_TOKEN 만          → 401 "OAuth access token is invalid"
+    #:     CLAUDE_CODE_OAUTH_TOKEN + SIMPLE=1  → "Not logged in · Please run /login"
+    #:
+    #: api_key 채널에서는 ``--bare`` 가 이미 같은 값을 세우므로 여기서 따로 넣지
+    #: 않는다. 스위치는 하나고, 그 하나를 켜는 자리도 하나다(argv).
+    _SIMPLE_ENV = "CLAUDE_CODE_SIMPLE"
+
+    def _auth_channel(self) -> str:
+        """argv 의 ``--bare`` 판정과 **같은 함수**를 쓴다 (문이 둘이면 한쪽만 고쳐진다)."""
+        return resolve_auth_channel(self._auth_mode, bool(self._api_key))
+
+    def _env_extras(self) -> Dict[str, str]:
+        extras: Dict[str, str] = dict(self._extra_env)
+        if self._api_key:
+            extras["ANTHROPIC_API_KEY"] = self._api_key
+        # 호스트가 넘긴 값이라도 구독 채널에서는 켜 둘 수 없다. 여기서 존중하면
+        # "설정 하나가 조용히 전 사용자를 로그아웃시키는" 문이 남는다 — 그리고 그
+        # 문은 연결 테스트로 잡히지 않는다(테스트 경로는 이 env 를 넣지 않는다).
+        if self._truthy(extras.get(self._SIMPLE_ENV)) and self._auth_channel() != "api_key":
+            extras.pop(self._SIMPLE_ENV, None)
+            if not ClaudeCodeCLIClient._simple_env_warned:
+                ClaudeCodeCLIClient._simple_env_warned = True
+                logger.warning(
+                    "CLAUDE_CODE_SIMPLE 을 구독 인증(auth_mode=%s) 에서 제거했다 — 그 "
+                    "스위치는 --bare 와 같은 것이라 OAuth·keychain 을 읽지 않게 만들고, "
+                    "모든 턴이 authentication_failed 로 죽는다. 맥락 자동주입을 끄려면 "
+                    "인증을 건드리지 않는 수단을 쓸 것(--disable-slash-commands 등).",
+                    self._auth_mode,
+                )
+        return extras
+
+    @staticmethod
+    def _truthy(value: Any) -> bool:
+        return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+    def _make_runner(
+        self,
+        *,
+        timeout_s: Optional[float] = None,
+        request: Optional[APIRequest] = None,
+    ) -> CLIProcessRunner:
+        effective_timeout = self._timeout_s if timeout_s is None else timeout_s
+        env_extras = self._env_extras()
+        if request is not None and getattr(request, "thinking_level", None) == "off":
+            # 생각 끄기는 argv 가 아니라 env 다(Claude Code: MAX_THINKING_TOKENS=0).
+            env_extras["MAX_THINKING_TOKENS"] = "0"
+        # A host-supplied runner factory (e.g. a container sandbox) runs the
+        # CLI elsewhere — the agent binary need not exist on this host — so the
+        # host-binary check is the *default* in-process runner's concern only.
+        if self._runner_factory is not None:
+            return self._runner_factory(
+                binary=self._binary,
+                cwd=self._workspace_dir,
+                env_extras=env_extras,
+                timeout_s=effective_timeout,
+            )
+        if not self._binary:
+            raise CLIBinaryNotFound(
+                "claude binary not found. Set binary_path=, CLAUDE_CODE_BINARY env var, "
+                "or ensure 'claude' is on PATH."
+            )
+        return CLIProcessRunner(
+            binary=self._binary,
+            cwd=self._workspace_dir,
+            env_extras=env_extras,
+            timeout_s=effective_timeout,
+        )
+
+    def _build_argv(self, request: APIRequest) -> List[str]:
+        return claude_code_argv(
+            request,
+            bare_mode=self._bare_mode,
+            auth_mode=self._auth_mode,
+            has_api_key=bool(self._api_key),
+            permission_mode=self._default_permission_mode,
+            max_budget_usd=self._max_budget_usd,
+            settings_path=self._settings_path,
+            mcp_config=self._mcp_config,
+            allow_tools=self._allow_tools,
+            disallow_tools=self._disallow_tools,
+            extra_args=self._extra_args,
+        )
+
+    def _build_request(
+        self,
+        *,
+        model_config: ModelConfig,
+        messages: List[Dict[str, Any]],
+        system: Any,
+        tools: Optional[List[Dict[str, Any]]],
+        tool_choice: Optional[Dict[str, Any]],
+        stream: bool,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> APIRequest:
+        """Canonical request assembly + client-level session continuity.
+
+        The high-level ``create_message`` / ``create_message_stream``
+        surface (the only one stages call) has no ``session_hint``
+        parameter, so before 2.2.0 ``supports_session_continuity=True``
+        was advertised but unreachable: the argv builder knew how to emit
+        ``--resume`` / ``--session-id`` and no request ever carried the
+        hint. The client-level default set via the constructor or
+        ``configure(session_hint=...)`` closes that gap; an explicit
+        per-request hint (low-level ``_send`` callers) still wins.
+        """
+        request = super()._build_request(
+            model_config=model_config,
+            messages=messages,
+            system=system,
+            tools=tools,
+            tool_choice=tool_choice,
+            stream=stream,
+            response_format=response_format,
+        )
+        if self._session_hint and request.session_hint is None:
+            request.session_hint = dict(self._session_hint)
+        return request
+
+    # ─────────────────────────────────────── version handshake ─
+
+    async def _ensure_cli_version(self) -> str:
+        """One-time ``<binary> --version`` handshake (lazy, cached).
+
+        All four 2.1.x boundary incidents were version skew, and the
+        post-mortems had to reconstruct which CLI was deployed from
+        infrastructure logs because nothing in the executor recorded it.
+        The probe runs once per client instance, is capped at
+        ``_VERSION_PROBE_TIMEOUT_S``, and **never** fails the call — a
+        broken probe caches ``"unknown"`` and moves on. The result is
+        logged at INFO, attached to ``APIResponse.raw['cli_version']``,
+        and appended to CLI ``APIError`` messages.
+        """
+        if self._cli_version_value is not None:
+            return self._cli_version_value
+        version = "unknown"
+        try:
+            runner = self._make_runner(
+                timeout_s=min(self._VERSION_PROBE_TIMEOUT_S, self._timeout_s)
+            )
+            result = await runner.run_oneshot(["--version"])
+            text = result.stdout.decode("utf-8", errors="replace").strip()
+            if result.returncode == 0 and text:
+                # First line only — defensive against chatty wrappers.
+                version = text.splitlines()[0].strip()
+        except Exception:
+            # Deliberately broad: the handshake is telemetry, not a
+            # precondition. Whatever broke here will resurface with a
+            # proper category on the real call.
+            version = "unknown"
+        self._cli_version_value = version
+        logger.info(
+            "Claude Code CLI version handshake: %s (binary=%s)",
+            version,
+            self._binary,
+        )
+        return version
+
+    async def warmup(self, *, timeout_s: float = 8.0) -> bool:
+        """Run the ``--version`` handshake ahead of the first real call.
+
+        TTFT program (2.50.0, finding C2): the probe used to be awaited
+        serially in front of the session's FIRST real spawn — two Node
+        cold starts back to back on the first token's critical path.
+        Warming it here caches the version on the instance, so turn 1
+        goes straight to the real spawn.
+        """
+        import asyncio
+
+        try:
+            await asyncio.wait_for(self._ensure_cli_version(), timeout=timeout_s)
+            return self._cli_version_value not in (None, "unknown")
+        except Exception:  # noqa: BLE001 — warmup is best-effort by contract
+            return False
+
+    def _with_version(self, message: str) -> str:
+        """Append the handshaken CLI version to an error message."""
+        if self._cli_version_value:
+            return f"{message} [cli_version={self._cli_version_value}]"
+        return message
+
+    def _attach_cli_version(self, response: APIResponse) -> APIResponse:
+        if isinstance(response.raw, dict) and self._cli_version_value:
+            response.raw.setdefault("cli_version", self._cli_version_value)
+        return response
+
+    # ─────────────────────────────────────── wire-shape telemetry ─
+
+    def _report_unknown_wire(
+        self,
+        *,
+        unknown_count: int,
+        malformed_count: int,
+        first_unknown_type: Optional[str],
+    ) -> None:
+        """Forward wire-drift telemetry; optionally fail under strict_wire.
+
+        Emitted at most once per call (the caller invokes this once,
+        after the stream drains) so hosts get a single
+        ``llm_client.unknown_wire_shape`` signal per request rather than
+        a token-rate flood. This is the consumer the v2.1.4 masking
+        channel never had: the parser produced ``cli_unknown`` tags for
+        weeks and nothing read them (audit §2.2).
+        """
+        total = unknown_count + malformed_count
+        if not total:
+            return
+        if self._event_sink is not None:
+            self._event_sink(
+                {
+                    "type": "llm_client.unknown_wire_shape",
+                    "provider": self.provider,
+                    "unknown_type": first_unknown_type,
+                    "count": total,
+                    "unknown_line_count": unknown_count,
+                    "malformed_line_count": malformed_count,
+                    "cli_version": self._cli_version_value or "unknown",
+                }
+            )
+        if self._strict_wire:
+            raise APIError(
+                self._with_version(
+                    "Claude Code CLI emitted "
+                    f"{total} unknown/malformed stream-json line(s) "
+                    f"(first unknown type: {first_unknown_type!r}) and this "
+                    "client was constructed with strict_wire=True"
+                ),
+                category=ErrorCategory.CLI_PROTOCOL_ERROR,
+            )
+
+    def _post_wire_checks(self, response: APIResponse) -> APIResponse:
+        """Telemetry + strict enforcement for the assembler path, which
+        only exposes counts through ``APIResponse.raw``."""
+        raw = response.raw if isinstance(response.raw, dict) else {}
+        self._report_unknown_wire(
+            unknown_count=int(raw.get("unknown_line_count", 0) or 0),
+            malformed_count=int(raw.get("malformed_line_count", 0) or 0),
+            first_unknown_type=raw.get("first_unknown_type"),
+        )
+        return self._attach_cli_version(response)
+
+    # ─────────────────────────────────────────────────────── _send ─
+
+    async def _send(self, request: APIRequest, *, purpose: str = "") -> APIResponse:
+        try:
+            runner = self._make_runner(request=request)
+        except CLIBinaryNotFound as e:
+            raise APIError(str(e), category=ErrorCategory.CLI_NOT_FOUND) from e
+
+        # Vision on the non-streaming surface: the ``--print`` positional
+        # prompt is text-only, so a request that carries image blocks must
+        # travel over the stream-json wire (which ingests base64 images
+        # natively). ``create_message`` still returns one assembled
+        # APIResponse — only the wire mode changes. Without this, every
+        # non-stream vision call (e.g. screen-observation captioning) lost
+        # its image and the model answered "I don't see an image".
+        if not request.stream and messages_have_images(request.messages):
+            request = replace(request, stream=True)
+
+        cli_version = await self._ensure_cli_version()
+        argv = self._build_argv(request)
+        stdin = build_stream_json_stdin(request.messages) if request.stream else None
+
+        try:
+            if request.stream:
+                response = await assemble_response_from_stream_json(
+                    runner.stream(argv, stdin_iter=aiter_bytes(stdin)),
+                    model=request.model,
+                    cli_version=cli_version,
+                )
+                return self._post_wire_checks(response)
+            result = await runner.run_oneshot(argv, stdin=stdin)
+            if result.returncode != 0:
+                raise _classify_cli_result(result, cli_version=cli_version)
+            return self._attach_cli_version(
+                parse_json_output_to_response(result.stdout, model=request.model)
+            )
+        except CLIBinaryNotFound as e:
+            raise APIError(self._with_version(str(e)), category=ErrorCategory.CLI_NOT_FOUND) from e
+        except CLITimeout as e:
+            raise APIError(self._with_version(str(e)), category=ErrorCategory.CLI_TIMEOUT) from e
+        except CLIAuthFailed as e:
+            raise APIError(
+                self._with_version(str(e)), category=ErrorCategory.CLI_AUTH_FAILED
+            ) from e
+        except CLIProtocolError as e:
+            raise APIError(
+                self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
+            ) from e
+        except RuntimeError as e:
+            # stream-json error envelope was raised by the assembler.
+            raise APIError(
+                self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
+            ) from e
+
+    # ───────────────────────────────────────────────── streaming API ─
+
+    async def create_message_stream(
+        self,
+        *,
+        model_config: ModelConfig,
+        messages: List[Dict[str, Any]],
+        system: Any = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Dict[str, Any]] = None,
+        purpose: str = "",
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Yield per-token canonical events as the CLI streams output.
+
+        Events match the format documented in
+        ``translators._cli.stream_json_line_to_canonical_event``:
+        ``text_delta``, ``thinking_delta``, ``input_json_delta``,
+        ``tool_use``, ``content_block_stop``, ``result``, ``error``.
+
+        After the CLI exits we emit one final
+        ``{"type": "message_complete", "response": APIResponse}``
+        event with the fully assembled response (text + thinking +
+        tool_use blocks, stop_reason, usage). Without this terminal
+        envelope the s06_api stage's streaming consumer raises
+        ``Stream ended without message_complete`` — it builds the
+        assistant message from ``chunk["response"]`` and the previous
+        implementation never populated that field. (Mirrors the
+        ``anthropic`` / ``openai`` / ``google`` SDK clients' contract.)
+        """
+        request = self._build_request(
+            model_config=model_config,
+            messages=messages,
+            system=system,
+            tools=tools,
+            tool_choice=tool_choice,
+            stream=True,
+        )
+
+        try:
+            runner = self._make_runner(request=request)
+        except CLIBinaryNotFound as e:
+            raise APIError(str(e), category=ErrorCategory.CLI_NOT_FOUND) from e
+
+        cli_version = await self._ensure_cli_version()
+        argv = self._build_argv(request)
+        stdin = build_stream_json_stdin(messages)
+
+        # Hot-spare prewarm (C1): claim the process booted after the last
+        # turn when its argv matches — Node boot + auth + MCP startup are
+        # already done and the prompt travels over stdin exactly as on a
+        # fresh spawn.
+        spare_proc = self._take_spare(argv, request)
+
+        from xgen_rsi.base.llm_client._cli_runtime import parse_stream_json_line
+
+        # Shared accumulator handles both stream-json shapes:
+        #   - delta form (``--include-partial-messages`` on, true streaming)
+        #   - full-message form (Claude Code 2.x default — content[]
+        #     arrives in one ``assistant`` envelope).
+        # Without the message-form branch, every assistant frame yielded
+        # zero text and the terminal APIResponse came back empty —
+        # exactly the symptom the user reported (``output_len=0``).
+        accum = StreamJsonAccumulator(model=model_config.model, cli_version=cli_version)
+
+        try:
+            # ``aclosing`` finalizes the runner generator *synchronously*
+            # when this generator is closed mid-answer (SSE consumer
+            # disconnect → GeneratorExit at a ``yield`` below). Without
+            # it the inner generator — and the kill ladder in its
+            # ``finally`` — would only run whenever the GC's asyncgen
+            # hook got around to it, leaving a live ``claude`` child in
+            # the meantime (audit 2026-06-09 §3.7).
+            async with aclosing(
+                runner.stream(argv, stdin_iter=aiter_bytes(stdin), prespawned=spare_proc)
+            ) as lines:
+                async for raw in lines:
+                    line_obj = parse_stream_json_line(raw)
+                    if line_obj is None:
+                        continue
+                    # Surface CLI-side errors as APIError so the stage's
+                    # retry/escalate path runs instead of silently producing
+                    # an empty response. (Malformed lines have no ``type``
+                    # key — they fall through to ``feed`` for counting.)
+                    if str(line_obj.get("type", "")) == "error":
+                        raise APIError(
+                            self._with_version(
+                                f"Claude Code CLI reported error: "
+                                f"{line_obj.get('message') or line_obj!r}"
+                            ),
+                            category=ErrorCategory.CLI_PROTOCOL_ERROR,
+                        )
+                    # Surface the authentication_failed annotation that the
+                    # CLI emits on the assistant frame when no credential
+                    # is available — without this we'd swallow the
+                    # "Not logged in" placeholder text as the assistant's
+                    # answer and call the session "successful".
+                    if str(line_obj.get("error", "")) == "authentication_failed":
+                        raise APIError(
+                            self._with_version(
+                                "Claude Code CLI is not authenticated (claude --print "
+                                "returned error=authentication_failed). Sign in via "
+                                "Settings → LLM Backends → Claude Code (CLI)."
+                            ),
+                            category=ErrorCategory.CLI_AUTH_FAILED,
+                        )
+
+                    # Feed accumulator + stream canonical events to consumer.
+                    for event in accum.feed(line_obj):
+                        yield event
+
+            # Wire-drift telemetry must run before the terminal envelope:
+            # strict_wire failures should look like a failed call, not a
+            # successful one with a footnote.
+            self._report_unknown_wire(
+                unknown_count=accum.unknown_line_count,
+                malformed_count=accum.malformed_line_count,
+                first_unknown_type=accum.first_unknown_type,
+            )
+            # Replenish the hot spare for the NEXT turn (success path
+            # only — a failed call may mean broken config not worth
+            # prebooting again). Awaited inline: all tokens are already
+            # out, and a background spawn task wedges 3.11/3.12 loop
+            # teardown (see _schedule_spare).
+            await self._schedule_spare(argv, request)
+            yield {
+                "type": "message_complete",
+                "response": self._attach_cli_version(accum.finalize()),
+            }
+        except CLIBinaryNotFound as e:
+            raise APIError(self._with_version(str(e)), category=ErrorCategory.CLI_NOT_FOUND) from e
+        except CLITimeout as e:
+            raise APIError(self._with_version(str(e)), category=ErrorCategory.CLI_TIMEOUT) from e
+        except CLIProtocolError as e:
+            raise APIError(
+                self._with_version(str(e)), category=ErrorCategory.CLI_PROTOCOL_ERROR
+            ) from e

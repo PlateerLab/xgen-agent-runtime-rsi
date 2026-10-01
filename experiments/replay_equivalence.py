@@ -18,8 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
-from xgen_agent_runtime.host import runner as runner_mod
-
+from xgen_rsi.base.host import runner as runner_mod
 from xgen_rsi.evolve.runner import PolicySpec, run_trial
 from xgen_rsi.evolve.tasks import load_suite
 from xgen_rsi.kernel.executor import BUILTIN_H0

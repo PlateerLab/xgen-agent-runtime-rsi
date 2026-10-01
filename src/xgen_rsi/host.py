@@ -15,7 +15,7 @@ import os
 import tempfile
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
-from xgen_agent_runtime.tools.base import ToolContext
+from xgen_rsi.base.tools.base import ToolContext
 
 WORKSPACE_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep")
 
@@ -135,7 +135,7 @@ class LocalHost:
 
     # ── 도구 ────────────────────────────────────────────────────────────
     def register_builtin_tools(self, registry: Any, **k: Any) -> Dict[str, Any]:
-        from xgen_agent_runtime.tools.built_in import BUILT_IN_TOOL_CLASSES
+        from xgen_rsi.base.tools.built_in import BUILT_IN_TOOL_CLASSES
 
         names: List[str] = []
         for name in self.builtin_tools:

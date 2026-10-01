@@ -68,7 +68,7 @@ def _enforce_gate_reachability(registry: Any) -> List[str]:
     activate = getattr(registry, "activate", None)
     if not (callable(names) and callable(is_exposed) and callable(activate)):
         return []
-    from xgen_agent_runtime.tools.gates import reachability_fixes
+    from xgen_rsi.base.tools.gates import reachability_fixes
 
     try:
         fixes = reachability_fixes(names(), is_exposed)
@@ -84,7 +84,7 @@ def _restore_from_history(registry: Any, messages: Any) -> List[str]:
     activate = getattr(registry, "activate", None)
     if not (callable(names) and callable(is_exposed) and callable(activate)):
         return []
-    from xgen_agent_runtime.tools.gates import restore_from_history
+    from xgen_rsi.base.tools.gates import restore_from_history
 
     try:
         wanted = restore_from_history(names(), is_exposed, messages or [])

@@ -35,6 +35,7 @@
 
 **공통 조건**
 - 런타임: 두 엔진 모두 xgen-agent-runtime **4.78.0** wheel. 공급자 계층(클라이언트·재시도·Responses API)도 같다.
+  (이 실험은 geny-rsi 0.1.0~0.2.0, 런타임을 라이브러리로 쓰던 때다. 0.3.0 부터 geny-rsi 는 런타임을 의존하지 않고 4.80.0 사본 `xgen_rsi.base` 를 쓴다.)
 - 호스트: `EvalHost`(LocalHost). 시행마다 독립 작업 공간, 내장 파일 도구 5종(Read·Write·Edit·Glob·Grep)은 그 안으로만 쓴다.
   시작 파일의 수정 시각은 경로 순으로 고정한다(Glob 의 결과 순서를 결정적으로 — §4 참조).
 - 정책 설정: 모델 기본값(temperature 0.7 요청, 추론 모델은 공급자 규칙대로), 기억·자기진화 끔, 과제별 반복 상한(xgen-core 기본·xgen-hard 30).

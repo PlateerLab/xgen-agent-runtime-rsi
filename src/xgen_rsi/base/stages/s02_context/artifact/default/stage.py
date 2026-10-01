@@ -1,0 +1,699 @@
+"""Stage 2: Context — concrete stage implementation."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional
+
+from xgen_rsi.base.core.compaction import reconcile_recorded_index, run_compaction
+from xgen_rsi.base.core.schema import ConfigField, ConfigSchema
+from xgen_rsi.base.core.shared_keys import SharedKeys
+from xgen_rsi.base.core.slot import StrategySlot
+from xgen_rsi.base.core.stage import Stage
+from xgen_rsi.base.core.context_prune import (
+    DEFAULT_PRUNE_OVER_TOKENS,
+    prune_messages,
+)
+from xgen_rsi.base.core.state import PipelineState
+from xgen_rsi.base.core.token_estimate import estimate_prompt_tokens
+from xgen_rsi.base.memory.provider import (
+    MemoryEvent,
+    MemoryProvider,
+    RetrievalQuery,
+)
+from xgen_rsi.base.stages.s02_context.interface import (
+    ContextStrategy,
+    HistoryCompactor,
+    MemoryRetriever,
+)
+from xgen_rsi.base.stages.s02_context.artifact.default.strategies import (
+    HybridStrategy,
+    ProgressiveDisclosureStrategy,
+    SimpleLoadStrategy,
+)
+from xgen_rsi.base.stages.s02_context.artifact.default.compactors import (
+    LLMSummaryCompactor,
+    SlidingWindowCompactor,
+    SummaryCompactor,
+    TruncateCompactor,
+)
+from xgen_rsi.base.stages.s02_context.artifact.default.retrievers import (
+    NullRetriever,
+    StaticRetriever,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class _CompactionShadow:
+    """Minimal state stand-in for background compaction (TTFT program).
+
+    ``LLMSummaryCompactor.compact`` reads ``messages`` / ``model`` /
+    ``llm_client`` and assigns ``messages``; events it emits are
+    collected here and replayed onto the real state when the result is
+    applied, so observability is preserved turn-shifted.
+    """
+
+    def __init__(self, state: PipelineState):
+        self.messages: List[Dict[str, Any]] = list(state.messages)
+        self.model = getattr(state, "model", "")
+        self.llm_client = getattr(state, "llm_client", None)
+        self.context_window_budget = getattr(state, "context_window_budget", 200_000)
+        self.shared: Dict[str, Any] = {}
+        self.events: List[tuple] = []
+
+    def add_event(self, event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
+        self.events.append((event_type, dict(data or {})))
+
+
+class ContextStage(Stage[Any, Any]):
+    """Stage 2: Context.
+
+    Dual abstraction:
+      - Level 2 context_strategy: how to collect context
+      - Level 2 compactor: how to compress when over budget
+      - Level 2 retriever: how to fetch memory
+
+    Phase 1+ also accepts an optional :class:`MemoryProvider`. When
+    set, the unified `provider.retrieve(RetrievalQuery)` is invoked
+    *in addition to* the legacy retriever. Provider chunks are merged
+    after legacy retriever output, deduplicated by `key`. The result
+    is rendered into `state.metadata["memory_context"]` (string form
+    suitable for prompt injection).
+    """
+
+    def __init__(
+        self,
+        strategy: Optional[ContextStrategy] = None,
+        compactor: Optional[HistoryCompactor] = None,
+        retriever: Optional[MemoryRetriever] = None,
+        *,
+        stateless: bool = False,
+        provider: Optional[MemoryProvider] = None,
+        retrieval_timeout_s: float = 10.0,
+        compaction_enabled: bool = True,
+        background_compaction: bool = True,
+        prune_over_tokens: Optional[int] = DEFAULT_PRUNE_OVER_TOKENS,
+    ):
+        self._slots: Dict[str, StrategySlot] = {
+            "strategy": StrategySlot(
+                name="strategy",
+                strategy=strategy or SimpleLoadStrategy(),
+                registry={
+                    "simple_load": SimpleLoadStrategy,
+                    "hybrid": HybridStrategy,
+                    "progressive_disclosure": ProgressiveDisclosureStrategy,
+                },
+                description="Context collection strategy",
+            ),
+            "compactor": StrategySlot(
+                name="compactor",
+                strategy=compactor or TruncateCompactor(),
+                registry={
+                    "truncate": TruncateCompactor,
+                    "summary": SummaryCompactor,
+                    "llm_summary": LLMSummaryCompactor,
+                    "sliding_window": SlidingWindowCompactor,
+                },
+                description="History compaction strategy",
+            ),
+            "retriever": StrategySlot(
+                name="retriever",
+                strategy=retriever or NullRetriever(),
+                registry={
+                    "null": NullRetriever,
+                    "static": StaticRetriever,
+                },
+                description="Memory retrieval strategy",
+            ),
+        }
+        self._stateless = stateless
+        self._provider = provider
+        self._retrieval_timeout_s = max(0.0, float(retrieval_timeout_s))
+        # Host-level compaction switch. False → this stage NEVER compacts
+        # (no proactive run, no background scheduling, no deterministic
+        # prune — those only run inside the compaction path). Retrieval /
+        # strategy / memory injection are unaffected. Note the Stage 4
+        # guard auto-wires its budget recovery from this stage's compactor
+        # each turn (Pipeline._init_state); hosts turning compaction off
+        # should also not register a token-budget guard, or accept that
+        # its "compact" signal degrades to a hard reject.
+        self._compaction_enabled = bool(compaction_enabled)
+        # Background deferral of the LLM summary (TTFT). One-shot hosts —
+        # a fresh pipeline per turn (xgen-workflow agent node) — must turn
+        # this OFF: the deferred summary is applied at the NEXT turn's
+        # Stage 2, and with no next turn on the same pipeline the work is
+        # discarded (wasted LLM call) and the pending task leaks into
+        # loop teardown. False → the 80% trigger always compacts
+        # synchronously.
+        self._background_compaction = bool(background_compaction)
+        # 비용 트리거 (4.35.0). 용량 트리거(윈도우×0.8)는 윈도우가 크면 영영
+        # 오지 않는다 — dev 28일 최대 프롬프트 135k 대 문턱 160k/419k 로 결정적
+        # prune 이 한 번도 돌지 않았다. 여기서는 윈도우와 무관하게 절대 토큰 수로
+        # 본다: 넘으면 매 반복 앞에서 중복·오래된 거대 결과를 정리한다(LLM 없음).
+        # None 또는 0 이면 끔 — 용량 경로만 남는다.
+        self._prune_over_tokens = int(prune_over_tokens or 0)
+        # In-flight background compaction (TTFT program, finding B3):
+        # {"task", "len", "message_ids"}. The full prefix identity tuple
+        # is the compare-and-swap token used before installing a result.
+        self._bg_compaction: Optional[Dict[str, Any]] = None
+
+    @property
+    def provider(self) -> Optional[MemoryProvider]:
+        return self._provider
+
+    @provider.setter
+    def provider(self, value: Optional[MemoryProvider]) -> None:
+        self._provider = value
+
+    @property
+    def _strategy(self) -> ContextStrategy:
+        return self._slots["strategy"].strategy  # type: ignore[return-value]
+
+    @property
+    def _compactor(self) -> HistoryCompactor:
+        return self._slots["compactor"].strategy  # type: ignore[return-value]
+
+    @property
+    def _retriever(self) -> MemoryRetriever:
+        return self._slots["retriever"].strategy  # type: ignore[return-value]
+
+    @property
+    def name(self) -> str:
+        return "context"
+
+    @property
+    def order(self) -> int:
+        return 2
+
+    @property
+    def category(self) -> str:
+        return "ingress"
+
+    def get_strategy_slots(self) -> Dict[str, StrategySlot]:
+        return self._slots
+
+    def get_config_schema(self) -> ConfigSchema:
+        return ConfigSchema(
+            name="context",
+            fields=[
+                ConfigField(
+                    name="stateless",
+                    type="boolean",
+                    label="Stateless",
+                    description="Bypass context assembly (no conversation history).",
+                    default=False,
+                    ui_widget="toggle",
+                ),
+                ConfigField(
+                    name="retrieval_timeout_s",
+                    type="number",
+                    label="Retrieval timeout (s)",
+                    description=(
+                        "Upper bound on per-turn memory retrieval. A slow "
+                        "vector store / embedding endpoint degrades to a "
+                        "memory-less turn instead of stalling the first "
+                        "token. 0 disables the bound."
+                    ),
+                    default=10.0,
+                    min_value=0,
+                ),
+                ConfigField(
+                    name="compaction_enabled",
+                    type="boolean",
+                    label="Compaction enabled",
+                    description=(
+                        "Master switch for history compaction in this stage. "
+                        "Off → no proactive compaction, no background summary, "
+                        "no deterministic prune; retrieval and memory injection "
+                        "still run. The Stage 4 guard's budget recovery is also "
+                        "skipped (Pipeline auto-wire respects this flag)."
+                    ),
+                    default=True,
+                    ui_widget="toggle",
+                ),
+                ConfigField(
+                    name="prune_over_tokens",
+                    type="number",
+                    label="Prune over tokens",
+                    description=(
+                        "Run the deterministic prune (duplicate tool results, "
+                        "stale oversized outputs, stale images) whenever the "
+                        "projected prompt exceeds this many tokens — regardless "
+                        "of the context window. The window-based trigger alone "
+                        "never fires on large-window models. 0 disables it."
+                    ),
+                    default=DEFAULT_PRUNE_OVER_TOKENS,
+                    min_value=0,
+                ),
+                ConfigField(
+                    name="background_compaction",
+                    type="boolean",
+                    label="Background compaction",
+                    description=(
+                        "Defer the LLM summary to a background task in the "
+                        "80–90% band (TTFT). Turn OFF for one-shot hosts that "
+                        "build a fresh pipeline per turn — the deferred result "
+                        "would be discarded and the task leaks into teardown; "
+                        "off = the 80% trigger always compacts synchronously."
+                    ),
+                    default=True,
+                    ui_widget="toggle",
+                ),
+            ],
+        )
+
+    def get_config(self) -> Dict[str, Any]:
+        return {
+            "stateless": self._stateless,
+            "retrieval_timeout_s": self._retrieval_timeout_s,
+            "compaction_enabled": self._compaction_enabled,
+            "background_compaction": self._background_compaction,
+            "prune_over_tokens": self._prune_over_tokens,
+        }
+
+    def update_config(self, config: Dict[str, Any]) -> None:
+        if "stateless" in config:
+            self._stateless = bool(config["stateless"])
+        if "retrieval_timeout_s" in config:
+            try:
+                self._retrieval_timeout_s = max(0.0, float(config["retrieval_timeout_s"]))
+            except (TypeError, ValueError):
+                pass
+        if "compaction_enabled" in config:
+            self._compaction_enabled = bool(config["compaction_enabled"])
+        if "background_compaction" in config:
+            self._background_compaction = bool(config["background_compaction"])
+        if "prune_over_tokens" in config:
+            try:
+                self._prune_over_tokens = max(0, int(config["prune_over_tokens"]))
+            except (TypeError, ValueError):
+                pass
+
+    def should_bypass(self, state: PipelineState) -> bool:
+        return self._stateless
+
+    async def _retrieve_memory(self, query: str, state: PipelineState) -> List[Any]:
+        """Run the legacy retriever and the provider retrieval CONCURRENTLY,
+        bounded by ``retrieval_timeout_s``.
+
+        TTFT program (2026-07-12 audit, finding B1): both paths are
+        independent reads that used to run back-to-back in front of the
+        first API call. On timeout the turn proceeds WITHOUT memory —
+        a degraded answer beats a stalled first token; the event trail
+        records the skip. Real retrieval errors still propagate exactly
+        as before.
+        """
+        use_provider = self._provider is not None and bool(query)
+
+        async def _both():
+            if not use_provider:
+                return await self._retriever.retrieve(query, state), None
+            return await asyncio.gather(
+                self._retriever.retrieve(query, state),
+                self._provider.retrieve(RetrievalQuery(text=query)),
+            )
+
+        timeout = self._retrieval_timeout_s or None
+        try:
+            retrieved, provider_result = await asyncio.wait_for(_both(), timeout=timeout)
+        except asyncio.TimeoutError:
+            state.add_event(
+                "context.retrieval_timeout",
+                {"timeout_s": self._retrieval_timeout_s},
+            )
+            logger.warning(
+                "context: memory retrieval exceeded %.1fs — proceeding without memory",
+                self._retrieval_timeout_s,
+            )
+            return []
+
+        chunks = list(retrieved)
+        if provider_result is not None:
+            seen_keys = {c.key for c in chunks}
+            for c in provider_result.chunks:
+                if c.key not in seen_keys:
+                    chunks.append(c)
+                    seen_keys.add(c.key)
+            state.add_event(MemoryEvent.CONTEXT_BUILT.value, provider_result.to_event())
+        return chunks
+
+    def _window_hooks(self) -> Any:
+        """창 설정의 출처 — provider 에 붙은 hooks, 없으면 retriever 의 것, 그것도 없으면 기본값."""
+        for owner in (self._provider, self._retriever):
+            for attr in ("hooks", "_hooks"):
+                h = getattr(owner, attr, None)
+                if h is not None and hasattr(h, "window_full_turns"):
+                    return h
+        from xgen_rsi.base.memory.provider import MemoryHooks
+
+        return MemoryHooks()
+
+    async def _preload_short_term_window(self, state: PipelineState) -> None:
+        """턴 첫 반복에서, 호스트가 이력을 preload 하지 않았으면 STM 의 최근 논리 턴을 messages
+        **앞에** 되살린다(가까운 2턴은 도구까지, 먼 3턴은 대화만). 시스템 프롬프트의 "지식" 불릿으로
+        지난 턴을 보여 주던 L0 를 대신한다 — 대화는 대화 자리에 있어야 모델이 기록으로 읽는다."""
+        from xgen_rsi.base.memory.short_term_window import (
+            WINDOW_KEY,
+            WINDOW_LEN_KEY,
+            WindowConfig,
+            load_window,
+        )
+        from xgen_rsi.base.memory.strategy import _RECORDED_KEY
+
+        if state.iteration != 0 or state._is_continuation_slice:
+            return
+        if _RECORDED_KEY in state.metadata or WINDOW_KEY in state.metadata:
+            return  # 호스트가 이력을 preload 했거나(워터마크 존재) 이미 창을 넣었다
+        if self._provider is None:
+            return
+        cfg = WindowConfig.from_hooks(self._window_hooks())
+        if not cfg.enabled:
+            return
+        try:
+            window, report = await asyncio.wait_for(
+                load_window(self._provider, cfg), timeout=self._retrieval_timeout_s or None
+            )
+        except Exception:  # noqa: BLE001 — 창이 없어도 턴은 돈다
+            logger.debug("context: short-term window load failed", exc_info=True)
+            return
+        if not window:
+            return
+        state.messages = list(window) + list(state.messages)
+        # 창은 STM 에서 왔다 — Stage 18 STM 기록·대화 아카이브가 다시 적지 않도록 워터마크를 세운다.
+        state.metadata[_RECORDED_KEY] = len(window)
+        state.metadata[WINDOW_LEN_KEY] = len(window)
+        state.metadata[WINDOW_KEY] = report.as_event()
+        state.add_event("context.short_term_window", report.as_event())
+
+    async def execute(self, input: Any, state: PipelineState) -> Any:
+        # Build context via strategy
+        await self._strategy.build_context(state)
+        # 단기 기억 창 — 이력 preload 가 없는 호스트에서 최근 5 논리 턴을 messages 로.
+        await self._preload_short_term_window(state)
+
+        # Retrieve memory — extract query from the last user message, not final_text
+        # (final_text is only populated after Stage 9 Parse, not available here)
+        query = ""
+        for msg in reversed(state.messages):
+            if msg.get("role") == "user":
+                query = msg.get("content", "")
+                break
+        if isinstance(query, list):
+            # Extract text from content blocks (could be multimodal)
+            query = " ".join(
+                b.get("text", "") for b in query if isinstance(b, dict) and b.get("type") == "text"
+            )
+        query = str(query)
+
+        # Clear last turn's retrieved memory BEFORE this turn's retrieval
+        # (audit C1). ``state.metadata`` is sticky, and the injection below
+        # only WRITES these keys when chunks come back — so a retrieval
+        # that times out or returns nothing would leave the previous
+        # turn's situational memory presented as if it were current.
+        if state.iteration == 0 and not state._is_continuation_slice:
+            state.metadata.pop("memory_context", None)
+            state.metadata.pop("memory_pinned", None)
+
+        # TTFT program (finding B2): retrieval results are only injected
+        # into the prompt at iteration 0 (below) — later tool-loop
+        # iterations re-paid the embedding + vector round-trips for
+        # results that were thrown away. Skip retrieval entirely there.
+        chunks: List[Any] = []
+        if state.iteration == 0 and not state._is_continuation_slice:
+            chunks = await self._retrieve_memory(query, state)
+
+        if chunks:
+            # Deduplicate by key
+            seen = {ref.get("key") for ref in state.memory_refs}
+            for chunk in chunks:
+                if chunk.key not in seen:
+                    state.memory_refs.append(
+                        {
+                            "key": chunk.key,
+                            "source": chunk.source,
+                            "content_length": len(chunk.content),
+                            "relevance": chunk.relevance_score,
+                        }
+                    )
+                    seen.add(chunk.key)
+
+            # Split pinned chunks (always-inject T1 surface) from the
+            # rest (per-turn retrieval). The system prompt builder
+            # (``MemoryContextBlock``) renders them as two distinct
+            # sections so the agent can tell what's permanent from
+            # what's situational.
+            pinned_chunks = [
+                c
+                for c in chunks
+                if c.source == "pinned" or (c.metadata or {}).get("layer") == "pinned"
+            ]
+            other_chunks = [c for c in chunks if c not in pinned_chunks]
+
+            if state.messages and state.iteration == 0 and not state._is_continuation_slice:
+                if pinned_chunks:
+                    # Pinned chunks usually carry pre-rendered prose;
+                    # join with blank lines instead of the bullet
+                    # form used for search results.
+                    state.metadata["memory_pinned"] = "\n\n".join(c.content for c in pinned_chunks)
+                if other_chunks:
+                    memory_text = "\n".join(
+                        f"- [{c.source}] {c.key}: {c.content}" for c in other_chunks
+                    )
+                    state.metadata["memory_context"] = memory_text
+
+        # Proactive compaction: when the projected next-call context
+        # (system + messages + tools) crosses 80% of the window, compact
+        # so the Stage 4 token-budget guard's 95% safety net rarely has
+        # to. Both stages use ``estimate_prompt_tokens`` so compaction
+        # measurably lowers the same number the guard checks.
+        #
+        # TTFT program (finding B3): an LLM-backed compactor is a whole
+        # second model round-trip that used to run synchronously in
+        # front of the first token. Now: a finished background summary
+        # is applied first (cheap list swap); if still over 80% but
+        # under the 90% hard line, the summary is computed in the
+        # BACKGROUND (overlapping this turn's generation) and applied
+        # at the next turn's Stage 2. Past 90% — or for cheap non-LLM
+        # compactors — compaction stays synchronous as the safety net.
+        estimated_tokens = estimate_prompt_tokens(state)
+        forced_request = state.shared.pop(SharedKeys.CONTEXT_COMPACTION_REQUEST, None)
+
+        # Cost trigger (4.35.0), ahead of the capacity trigger below. The
+        # deterministic prune is cheap (pure function) and lossless for the
+        # recent tail, so what gates it is not "are we about to overflow" but
+        # "are we paying to resend a stale dump on every call". Runs on every
+        # iteration past the threshold; it is idempotent — a trimmed result is
+        # already under trim_over_chars and a de-duplicated one under
+        # min_dup_chars, so a second pass finds nothing left to do.
+        if self._compaction_enabled and self._prune_over_tokens:
+            if estimated_tokens > self._prune_over_tokens:
+                try:
+                    metrics = prune_messages(state.messages or [])
+                except Exception:  # noqa: BLE001 — relief, never a gate
+                    logger.debug("cost-triggered prune failed", exc_info=True)
+                else:
+                    if any(metrics.get(k) for k in ("deduped", "images_stripped", "trimmed")):
+                        state.shared.pop("_prompt_tokens_memo", None)
+                        before = estimated_tokens
+                        estimated_tokens = estimate_prompt_tokens(state)
+                        state.add_event(
+                            "context.pruned",
+                            dict(
+                                metrics,
+                                trigger="cost",
+                                threshold_tokens=self._prune_over_tokens,
+                                tokens_before=before,
+                                tokens_after=estimated_tokens,
+                            ),
+                        )
+
+        if self._compaction_enabled:
+            if await self._apply_bg_compaction(state):
+                state.shared.pop("_prompt_tokens_memo", None)
+                estimated_tokens = estimate_prompt_tokens(state)
+            budget = state.context_window_budget
+            if forced_request:
+                # A Stage-16 token dimension requested maintenance for
+                # pending work.  Run synchronously: deferring again would
+                # let the next Stage-4/API boundary hit the hard ceiling.
+                self.cancel_bg_compaction()
+                await run_compaction(
+                    state,
+                    self._compactor,
+                    trigger="requested",
+                    provider=self._provider,
+                    target_tokens=int(budget * 0.7),
+                )
+                state.shared.pop("_prompt_tokens_memo", None)
+                estimated_tokens = estimate_prompt_tokens(state)
+            elif estimated_tokens > budget * 0.8:
+                defer_to_background = (
+                    self._background_compaction
+                    and isinstance(self._compactor, LLMSummaryCompactor)
+                    and estimated_tokens <= budget * 0.9
+                )
+                if defer_to_background:
+                    self._schedule_bg_compaction(state)
+                else:
+                    await run_compaction(
+                        state,
+                        self._compactor,
+                        trigger="proactive",
+                        provider=self._provider,
+                        target_tokens=int(budget * 0.7),
+                    )
+                    estimated_tokens = estimate_prompt_tokens(state)
+        elif forced_request:
+            state.add_event(
+                "context.compaction_failed",
+                {
+                    "trigger": "requested",
+                    "error": "runtime compaction is disabled for this provider",
+                },
+            )
+
+        state.add_event(
+            "context.built",
+            {
+                "message_count": len(state.messages),
+                "memory_refs": len(state.memory_refs),
+                "estimated_tokens": estimated_tokens,
+            },
+        )
+
+        return input
+
+    # ── background compaction (TTFT program, finding B3) ─────────────
+
+    def cancel_bg_compaction(self) -> None:
+        """Cancel a pending background summary (pipeline teardown hook).
+
+        Without this, a one-shot host that closed its loop while a
+        deferred summary was still running got "Task was destroyed but
+        it is pending" on teardown. Idempotent; safe with no task.
+        """
+        info = self._bg_compaction
+        self._bg_compaction = None
+        if info is None:
+            return
+        task = info.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _schedule_bg_compaction(self, state: PipelineState) -> None:
+        """Kick off the LLM summary on a message SNAPSHOT, off the hot path.
+
+        History is append-only between turns, so a summary computed over
+        messages[0:N] stays applicable as long as that prefix survives;
+        the apply step verifies every captured message identity and discards
+        the result if a synchronous guard compaction rewrote history in
+        the meantime. At most one background run is in flight per stage.
+        """
+        if self._bg_compaction is not None:
+            return
+        snapshot_len = len(state.messages)
+        if snapshot_len == 0:
+            return
+        shadow = _CompactionShadow(state)
+        snapshot_ids = tuple(id(message) for message in state.messages)
+
+        async def _run() -> _CompactionShadow:
+            await self._compactor.compact(shadow)
+            return shadow
+
+        task = asyncio.create_task(_run())
+        # Surface failures in the log instead of "exception never retrieved".
+        task.add_done_callback(
+            lambda t: (
+                t.cancelled()
+                or t.exception() is None
+                or logger.warning("background compaction failed: %s", t.exception())
+            )
+        )
+        self._bg_compaction = {
+            "task": task,
+            "len": snapshot_len,
+            "message_ids": snapshot_ids,
+        }
+        state.add_event(
+            "context.compaction_scheduled",
+            {
+                "compactor": str(
+                    getattr(self._compactor, "name", "") or type(self._compactor).__name__
+                ),
+                "snapshot_messages": snapshot_len,
+            },
+        )
+
+    async def _apply_bg_compaction(self, state: PipelineState) -> bool:
+        """Swap in a finished background summary; True when history changed."""
+        info = self._bg_compaction
+        if info is None:
+            return False
+        task: asyncio.Task = info["task"]
+        if not task.done():
+            return False
+        self._bg_compaction = None
+        if task.cancelled() or task.exception() is not None:
+            return False  # already logged by the done-callback
+        shadow: _CompactionShadow = task.result()
+
+        n = int(info["len"])
+        msgs = state.messages
+        current_prefix_ids = tuple(id(message) for message in msgs[:n])
+        if len(msgs) < n or n == 0 or current_prefix_ids != info["message_ids"]:
+            # Prefix rewritten since the snapshot (e.g. the Stage 4 guard
+            # compacted synchronously) — the summary no longer matches.
+            return False
+        if len(shadow.messages) >= n:
+            return False  # compactor was a no-op (below its keep threshold)
+
+        before = len(msgs)
+        replaced = before - (len(shadow.messages) + (before - n))
+        before_list = list(msgs)
+        state.messages = list(shadow.messages) + msgs[n:]
+        # Keep Stage-18's STM watermark valid across the background swap
+        # (audit D3) — same contract as run_compaction's synchronous path.
+        reconcile_recorded_index(before_list, list(state.messages), state.metadata)
+        for event_type, data in shadow.events:
+            state.add_event(event_type, data)
+        compactor_name = str(getattr(self._compactor, "name", "") or type(self._compactor).__name__)
+        state.add_event(
+            "context.compacted",
+            {
+                "strategy": compactor_name,
+                "trigger": "background",
+                "messages_before": before,
+                "messages_after": len(state.messages),
+                "saved_tokens_estimate": 0,
+            },
+        )
+
+        # Persist the snapshot — same contract as run_compaction().
+        if (
+            replaced > 0
+            and self._provider is not None
+            and not getattr(self._compactor, "persists_own_compaction", False)
+            and hasattr(self._provider, "record_compaction")
+        ):
+            summary_head = ""
+            if state.messages and isinstance(state.messages[0], dict):
+                head_content = state.messages[0].get("content", "")
+                summary_head = head_content if isinstance(head_content, str) else ""
+            try:
+                await self._provider.record_compaction(
+                    summary_head,
+                    replaced_count=replaced,
+                    strategy=compactor_name,
+                    saved_tokens=0,
+                    session_id=getattr(state, "session_id", "") or "",
+                    trigger="background",
+                )
+            except Exception as exc:  # noqa: BLE001 — best effort
+                state.add_event(
+                    "context.compaction_record_failed",
+                    {"compactor": compactor_name, "error": str(exc)},
+                )
+        return True

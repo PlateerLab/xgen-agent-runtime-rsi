@@ -13,10 +13,10 @@
     for chunk in agent.stream_sync("Summarize report.md into summary.json"):
         print(chunk, end="")
 
-    baseline = GenyRSI.agent(..., engine="geny")                       # 같은 호출로 기존 21-stage 엔진(A/B 비교)
+    baseline = GenyRSI.agent(..., engine="geny")                       # 같은 호출로 21-stage 엔진(geny, base 사본) — A/B 비교
 
 턴 하나는 운영과 **같은 계약**으로 돈다 — ``geny-rsi`` 는 ``GenyRSITurnExecutor().run(host, **kwargs)``(턴 조립 26단계 →
-이 패키지의 커널 + 하네스), ``geny`` 는 기존 런타임의 ``AgentTurnExecutor().run(host, **kwargs)``(21-stage). 호스트는
+이 패키지의 커널 + 하네스), ``geny`` 는 사본 ``xgen_rsi.base`` 의 ``AgentTurnExecutor().run(host, **kwargs)``(21-stage). 호스트는
 :class:`LocalHost`(이 프로세스 안의 작업 공간·내장 도구·자격증명).
 """
 

@@ -1,6 +1,12 @@
 xgen-agent-runtime-rsi
 Copyright 2026 PlateerLab
 
+This product includes a copy of xgen-agent-runtime 4.80.0
+(https://github.com/PlateerLab/xgen-agent-runtime), Copyright 2026 PlateerLab,
+licensed under the Apache License, Version 2.0, as the package
+xgen_rsi/base. Module paths were changed from xgen_agent_runtime to
+xgen_rsi.base; this package does not import or depend on xgen-agent-runtime.
+
 This product includes software and texts adapted from the RRSI reference
 implementation (https://github.com/google-research/rrsi, commit be50316),
 Copyright 2026 The rrsi Authors / Google LLC, licensed under the Apache

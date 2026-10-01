@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime-rsi"
-version = "0.2.0"
+version = "0.3.0"
 description = "XGEN RSI harness — a swap-in agent harness that evolves itself with RRSI (regularized harness evolution) and Dream-RSI (replay-based exploration policy improvement)"
 readme = "README.md"
 license = "Apache-2.0"
@@ -20,11 +20,31 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
 ]
-# 계약 모듈(HostServices·도구 ABI·메모리 프로토콜·cancel_context)과 공급자 계층(llm_client)은
-# xgen-agent-runtime 이 소유한다. 이 패키지는 그 위에서 실행 코어만 새로 짓는다.
-# 이름으로만 요구한다 — 소비자(xgen-workflow)가 런타임 wheel 을 URL 로 고정해 두므로 버전이 둘로 갈리지 않는다.
+# geny-rsi 는 독립 패키지다 — xgen-agent-runtime 을 의존하지 않는다. 바탕 런타임(공급자 계층·도구·기억·호스트 계약)은
+# xgen-agent-runtime 4.80.0 을 복사한 ``xgen_rsi.base`` 이고, 아래는 그 사본이 쓰는 외부 라이브러리다.
+# 하한만 둔다 — 소비자(xgen-workflow)가 requirements.lock 으로 정확히 고정하고, 같은 환경의 다른 패키지와 겹쳐도 갈리지 않게.
 dependencies = [
-    "xgen-agent-runtime>=4.80.0",
+    "anthropic[bedrock]>=0.125.0",
+    "mcp>=1.30.0",
+    "pydantic>=2.12.5",
+    "jsonschema>=4.26.0",
+    "httpx>=0.28.1",
+    "pillow>=12.3.0",
+    "websockets>=16.1.1",
+    "pyyaml>=6.0.2",
+    "numpy>=2.3.2",
+    "croniter>=6.2.4",
+    "ddgs>=9.16.0",
+    "openai>=2.54.0",
+    "google-genai>=1.75.0",
+    "google-auth>=2.59.0",
+    "psycopg[binary]>=3.3.6",
+    "pgvector>=0.5.0",
+    "qdrant-client>=1.16.0",
+    "asyncssh>=2.23.1",
+    # 문서 읽기(ParseDocument). doc2chunk 는 xgen-pdf 를 이름으로만 요구하고 xgen-pdf 는 어느 인덱스에도 없어 URL 로 적는다.
+    "xgen-doc2chunk>=0.4.2",
+    "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
@@ -59,6 +79,8 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# xgen_rsi/base 는 xgen-agent-runtime 4.80.0 사본이다 — 원본과 비교해 갱신하기 쉽게 모듈 경로 말고는 손대지 않는다.
+extend-exclude = ["src/xgen_rsi/base"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

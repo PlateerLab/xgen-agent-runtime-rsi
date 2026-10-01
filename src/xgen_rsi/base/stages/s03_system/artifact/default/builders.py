@@ -1,0 +1,441 @@
+"""Prompt builders — concrete implementations for system prompt assembly."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
+
+from xgen_rsi.base.core.state import PipelineState
+from xgen_rsi.base.stages.s03_system.interface import PromptBlock, PromptBuilder
+
+
+class StaticPromptBuilder(PromptBuilder):
+    """Returns a fixed system prompt."""
+
+    def __init__(self, prompt: str = "You are a helpful assistant."):
+        self._prompt = prompt
+
+    @property
+    def name(self) -> str:
+        return "static"
+
+    @property
+    def description(self) -> str:
+        return "Fixed system prompt"
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        prompt = config.get("prompt")
+        if isinstance(prompt, str):
+            self._prompt = prompt
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"prompt": self._prompt}
+
+    def build(self, state: PipelineState) -> str:
+        return self._prompt
+
+
+class MutablePromptBuilder(PromptBuilder):
+    """A system prompt the running session can EDIT in place.
+
+    The self-modifying-environment feature installs this as the system builder;
+    the :class:`~xgen_rsi.base.core.environment_control.PipelineEnvironment`
+    controller holds a reference and edits the base text / appends sections at
+    runtime. Because Stage 3 calls :meth:`build` every turn, edits take effect
+    on the NEXT turn. Behaves like :class:`StaticPromptBuilder` when never
+    edited — so it is a safe drop-in default.
+    """
+
+    def __init__(
+        self,
+        prompt: str = "",
+        sections: Optional[List[str]] = None,
+        blocks: Optional[List[PromptBlock]] = None,
+    ):
+        self._base = prompt
+        self._sections: List[str] = [str(s) for s in (sections or [])]
+        # Dynamic blocks (e.g. datetime / memory) rendered per turn AFTER the
+        # editable base + sections. The session edits the base; these keep
+        # working. Lets a host (Geny) use MutablePromptBuilder in place of a
+        # ComposablePromptBuilder without losing its dynamic content.
+        self._blocks: List[PromptBlock] = list(blocks or [])
+
+    @property
+    def name(self) -> str:
+        return "mutable"
+
+    @property
+    def description(self) -> str:
+        return "Editable system prompt (self-modifying environment)"
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        prompt = config.get("prompt")
+        if isinstance(prompt, str):
+            self._base = prompt
+        sections = config.get("sections")
+        if isinstance(sections, list):
+            self._sections = [str(s) for s in sections]
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"prompt": self._base, "sections": list(self._sections)}
+
+    # ── Runtime edit API (driven by PipelineEnvironment) ──────────────
+    def set_base(self, text: str) -> None:
+        """Replace the base prompt."""
+        self._base = str(text)
+
+    def append_section(self, text: str) -> None:
+        """Append an extra section after the base prompt."""
+        self._sections.append(str(text))
+
+    def clear_sections(self) -> None:
+        """Drop all appended sections (keeps the base)."""
+        self._sections = []
+
+    def add_block(self, block: PromptBlock) -> "MutablePromptBuilder":
+        """Append a dynamic block (rendered per turn). Chainable."""
+        self._blocks.append(block)
+        return self
+
+    def current_text(self) -> str:
+        """The editable prompt (base + appended sections) as it stands now.
+        Excludes dynamic blocks — that's the part the session owns/edits."""
+        parts = [self._base, *self._sections]
+        return "\n\n".join(p for p in parts if p and p.strip())
+
+    def _render(self, state: Optional[PipelineState]) -> str:
+        parts: List[str] = [self._base, *self._sections]
+        for block in self._blocks:
+            try:
+                rendered = block.render(state)  # type: ignore[arg-type]
+            except Exception:  # noqa: BLE001 — a broken block never breaks the prompt
+                continue
+            if rendered:
+                parts.append(rendered if isinstance(rendered, str) else str(rendered))
+        return "\n\n".join(p for p in parts if p and p.strip())
+
+    def build(self, state: PipelineState) -> str:
+        return self._render(state)
+
+    def build_parts(self, state: PipelineState) -> Optional[List[Dict[str, Any]]]:
+        """Editable base + sections are one stable part; dynamic blocks
+        carry their own volatility (TTFT program). A runtime edit changes
+        the stable part — that costs one cache rebuild on the next turn,
+        which is exactly right."""
+        parts: List[Dict[str, Any]] = []
+        base = self.current_text()
+        if base:
+            parts.append({"name": "mutable_base", "text": base, "volatile": False})
+        for block in self._blocks:
+            try:
+                rendered = block.render(state)
+            except Exception:  # noqa: BLE001 — mirror _render: broken block never breaks the prompt
+                continue
+            if rendered:
+                parts.append(
+                    {
+                        "name": block.name,
+                        "text": rendered if isinstance(rendered, str) else str(rendered),
+                        "volatile": bool(getattr(block, "volatile", False)),
+                    }
+                )
+        return parts
+
+
+class PersonaBlock(PromptBlock):
+    """Character/role persona."""
+
+    def __init__(self, persona: str):
+        self._persona = persona
+
+    @property
+    def name(self) -> str:
+        return "persona"
+
+    def render(self, state: PipelineState) -> str:
+        return self._persona
+
+
+class RulesBlock(PromptBlock):
+    """Rules and constraints."""
+
+    def __init__(self, rules: List[str]):
+        self._rules = rules
+
+    @property
+    def name(self) -> str:
+        return "rules"
+
+    def render(self, state: PipelineState) -> str:
+        lines = ["# Rules"]
+        for i, rule in enumerate(self._rules, 1):
+            lines.append(f"{i}. {rule}")
+        return "\n".join(lines)
+
+
+class DateTimeBlock(PromptBlock):
+    """Current date/time injection.
+
+    Volatile (TTFT program, 2.50.0): minute-precision text changes
+    turn-to-turn, so this block must never sit inside the cached prompt
+    prefix — one ticked minute would re-prefill system + all history.
+    Precision itself is kept at minutes (hosts rely on the agent knowing
+    the time); relocation, not truncation, is the cache fix.
+    """
+
+    @property
+    def name(self) -> str:
+        return "datetime"
+
+    @property
+    def volatile(self) -> bool:
+        return True
+
+    def render(self, state: PipelineState) -> str:
+        # 배포가 정한 시간대로 말한다 (``TZ`` 미설정이면 UTC).
+        #
+        # 고정 UTC 였을 때: 한국(UTC+9) 사용자가 자정~오전 9시에 "오늘" 을 물으면
+        # 모델은 **어제 날짜**를 들고 일한다 — 하루 중 9시간이 틀린다. 시차가 있는
+        # 어느 배포에서나 같은 크기의 구멍이 생긴다.
+        #
+        # 시간대 **값**은 엔진이 정할 일이 아니다(배포마다 다르다). 엔진은 프로세스의
+        # 지역 시각을 읽고, 어느 시간대인지 **이름과 오프셋을 함께** 말해 준다 —
+        # 모델이 "09:06" 만 보고 어느 지역인지 추측하지 않도록.
+        now = datetime.now(timezone.utc).astimezone()
+        zone = now.tzname() or ""
+        offset = now.strftime("%z")
+        if offset:
+            offset = f"UTC{offset[:3]}:{offset[3:]}"
+        if zone.upper().startswith("UTC") or not zone:
+            label = offset or "UTC"
+        else:
+            label = f"{zone} ({offset})" if offset else zone
+        # 요일을 함께 준다 — "다음 주 화요일" 같은 요청을 모델이 달력 계산 없이 풀 수 있게.
+        # (로케일에 따라 %a 가 바뀌지 않도록 고정 약어)
+        weekday = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[now.weekday()]
+        return f"Current date: {now.strftime('%Y-%m-%d')} ({weekday}) {now.strftime('%H:%M')} {label}".rstrip()
+
+
+class PinnedFactsBlock(PromptBlock):
+    """T1 pinned facts only (``state.metadata["memory_pinned"]``).
+
+    Stable on purpose: the pinned ledger changes only when the host adds
+    or retires a key fact, so it belongs in the cached system prefix —
+    a rare edit costs one cache rebuild, while every turn in between
+    reads the prefix for free. The per-turn T2 retrieval tier lives in
+    :class:`RetrievedMemoryBlock` (volatile) instead.
+    """
+
+    @property
+    def name(self) -> str:
+        return "memory_pinned"
+
+    def render(self, state: PipelineState) -> str:
+        pinned = state.metadata.get("memory_pinned", "")
+        if isinstance(pinned, str) and pinned.strip():
+            return f"# Pinned Facts\n{pinned}"
+        return ""
+
+
+class RetrievedMemoryBlock(PromptBlock):
+    """T2 per-turn retrieved memory (``state.metadata["memory_context"]``).
+
+    Volatile: retrieval is keyed on the latest user message, so this text
+    changes nearly every turn. Keeping it out of the cached prefix is the
+    single biggest cache win for memory-enabled pipelines.
+    """
+
+    @property
+    def name(self) -> str:
+        return "memory_retrieved"
+
+    @property
+    def volatile(self) -> bool:
+        return True
+
+    def render(self, state: PipelineState) -> str:
+        memory_ctx = state.metadata.get("memory_context", "")
+        if isinstance(memory_ctx, str) and memory_ctx.strip():
+            return f"# Relevant Knowledge\n{memory_ctx}"
+        return ""
+
+
+class MemoryContextBlock(PromptBlock):
+    """Inject memory context from state.
+
+    Renders two distinct sections when present:
+
+    - ``# Pinned Facts`` — content the host has marked must-always-be-known
+      (sourced from ``state.metadata["memory_pinned"]``). This is the T1
+      "key fact" tier that bypasses search and is injected every turn.
+    - ``# Relevant Knowledge`` — content that came back from per-turn
+      retrieval (``state.metadata["memory_context"]``). This is the
+      T2 "search-on-demand" tier.
+
+    Either, both, or neither may be present. When neither is set the
+    block renders nothing so the system prompt stays clean.
+
+    Back-compat combined form. Volatile as a whole (the T2 half changes
+    every turn). New compositions should prefer the split
+    :class:`PinnedFactsBlock` + :class:`RetrievedMemoryBlock` so the
+    stable pinned tier can stay in the cached prefix.
+    """
+
+    @property
+    def name(self) -> str:
+        return "memory_context"
+
+    @property
+    def volatile(self) -> bool:
+        return True
+
+    def render(self, state: PipelineState) -> str:
+        parts: list[str] = []
+        pinned = state.metadata.get("memory_pinned", "")
+        if isinstance(pinned, str) and pinned.strip():
+            parts.append(f"# Pinned Facts\n{pinned}")
+        memory_ctx = state.metadata.get("memory_context", "")
+        if isinstance(memory_ctx, str) and memory_ctx.strip():
+            parts.append(f"# Relevant Knowledge\n{memory_ctx}")
+        if not parts:
+            return ""
+        return "\n\n".join(parts)
+
+
+class ToolInstructionsBlock(PromptBlock):
+    """Tool usage instructions."""
+
+    def __init__(self, instructions: str = ""):
+        self._instructions = instructions
+
+    @property
+    def name(self) -> str:
+        return "tool_instructions"
+
+    def render(self, state: PipelineState) -> str:
+        if self._instructions:
+            return f"# Tool Usage\n{self._instructions}"
+        if state.tools:
+            return (
+                "# Tool Usage\n"
+                "You have access to tools. Use them when appropriate to accomplish tasks."
+            )
+        return ""
+
+
+class TurnNotesBlock(PromptBlock):
+    """Host notes about this turn's situation (state.shared[TURN_NOTES]).
+
+    Volatile: the host rewrites them every turn from the current state (for
+    example which folders on the user's device this conversation is
+    connected to). In the volatile tail they never enter history, so a note
+    from an earlier turn cannot contradict the current one.
+    """
+
+    @property
+    def name(self) -> str:
+        return "turn_notes"
+
+    @property
+    def volatile(self) -> bool:
+        return True
+
+    def render(self, state: PipelineState) -> str:
+        from xgen_rsi.base.core.shared_keys import SharedKeys
+
+        notes = state.shared.get(SharedKeys.TURN_NOTES)
+        if isinstance(notes, str):
+            notes = [notes]
+        if not isinstance(notes, (list, tuple)):
+            return ""
+        return "\n\n".join(str(n).strip() for n in notes if str(n or "").strip())
+
+
+class CustomBlock(PromptBlock):
+    """User-defined custom block."""
+
+    def __init__(self, block_name: str, content: str):
+        self._name = block_name
+        self._content = content
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def render(self, state: PipelineState) -> str:
+        return self._content
+
+
+class ComposablePromptBuilder(PromptBuilder):
+    """Composable builder — assembles blocks in order.
+
+    Supports two output modes:
+      - String mode: concatenates all blocks with separators
+      - Content blocks mode: wraps each block as a content block with cache_control
+    """
+
+    def __init__(
+        self,
+        blocks: Optional[List[PromptBlock]] = None,
+        separator: str = "\n\n",
+        use_content_blocks: bool = False,
+    ):
+        self._blocks = list(blocks or [])
+        self._separator = separator
+        self._use_content_blocks = use_content_blocks
+
+    @property
+    def name(self) -> str:
+        return "composable"
+
+    @property
+    def description(self) -> str:
+        names = [b.name for b in self._blocks]
+        return f"Composable blocks: {', '.join(names)}"
+
+    def add_block(self, block: PromptBlock) -> ComposablePromptBuilder:
+        """Append a block and return self for chaining."""
+        self._blocks.append(block)
+        return self
+
+    def build(self, state: PipelineState) -> Union[str, List[Dict[str, Any]]]:
+        rendered = []
+        for block in self._blocks:
+            text = block.render(state)
+            if text:
+                rendered.append((block, text))
+
+        if not rendered:
+            return ""
+
+        if self._use_content_blocks:
+            content_blocks: List[Dict[str, Any]] = []
+            for block, text in rendered:
+                cb: Dict[str, Any] = {"type": "text", "text": text}
+                if block.cache_control:
+                    cb["cache_control"] = block.cache_control
+                content_blocks.append(cb)
+            return content_blocks
+
+        return self._separator.join(text for _, text in rendered)
+
+    def build_parts(self, state: PipelineState) -> Optional[List[Dict[str, Any]]]:
+        """Render blocks with their stability flags (TTFT program).
+
+        Content-blocks mode keeps its explicit per-block ``cache_control``
+        contract, so parts are only offered in string mode.
+        """
+        if self._use_content_blocks:
+            return None
+        parts: List[Dict[str, Any]] = []
+        for block in self._blocks:
+            text = block.render(state)
+            if text:
+                parts.append(
+                    {
+                        "name": block.name,
+                        "text": text,
+                        "volatile": bool(getattr(block, "volatile", False)),
+                    }
+                )
+        return parts

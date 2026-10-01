@@ -16,14 +16,14 @@ import asyncio
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from xgen_agent_runtime.core.errors import APIError, ErrorCategory, ExecutorErrorCode
-from xgen_agent_runtime.core.message_repair import (
+from xgen_rsi.base.core.errors import APIError, ErrorCategory, ExecutorErrorCode
+from xgen_rsi.base.core.message_repair import (
     normalize_messages_for_request,
     retire_tool_calls_by_name,
 )
-from xgen_agent_runtime.core.shared_keys import SharedKeys
-from xgen_agent_runtime.llm_client import timeouts as _timeouts
-from xgen_agent_runtime.stages.s06_api.artifact.default.retry import ExponentialBackoffRetry
+from xgen_rsi.base.core.shared_keys import SharedKeys
+from xgen_rsi.base.llm_client import timeouts as _timeouts
+from xgen_rsi.base.stages.s06_api.artifact.default.retry import ExponentialBackoffRetry
 
 #: "모델이 무언가를 내놓았다" 로 치는 청크 — 첫 응답 감시는 이것이 올 때까지 잰다.
 _CONTENT_CHUNK_TYPES = frozenset({"text_delta", "thinking_delta", "tool_use", "input_json_delta"})
@@ -73,7 +73,7 @@ def inject_turn_context(messages: List[Dict[str, Any]], context_text: str) -> Li
 
     기존 엔진의 함수를 그대로 부른다 — 자리 규칙(도구 결과가 아니라 사용자 말에, 4.78.0)이 갈라지지 않게.
     """
-    from xgen_agent_runtime.stages.s06_api.artifact.default.stage import APIStage
+    from xgen_rsi.base.stages.s06_api.artifact.default.stage import APIStage
 
     return APIStage._inject_turn_context(messages, context_text)
 

@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pytest
-from xgen_agent_runtime.host import runner as runner_mod
 
 from tests.kernel.fakes import EchoTool, FakeHost, ScriptedClient, text_step, tool_step
+from xgen_rsi.base.host import runner as runner_mod
 from xgen_rsi.harness.spec import load_manifest, save_manifest
 from xgen_rsi.kernel.executor import BUILTIN_H0
 from xgen_rsi.turn_executor import GenyRSITurnExecutor
@@ -74,7 +74,7 @@ def test_prompt_part_override_changes_the_request(monkeypatch, tmp_path):
     system_text = system if isinstance(system, str) else json.dumps(system, ensure_ascii=False)
     assert "Before finishing, re-read the request." in system_text
 
-    from xgen_agent_runtime.host._constants import EFFICIENCY_PROMPT_BLOCK
+    from xgen_rsi.base.host._constants import EFFICIENCY_PROMPT_BLOCK
 
     assert EFFICIENCY_PROMPT_BLOCK.strip()[:40] not in system_text
 
@@ -96,7 +96,7 @@ def test_lineage_table_routes_by_policy(monkeypatch, tmp_path):
 
 
 def test_rollout_uses_the_existing_format(monkeypatch, tmp_path):
-    from xgen_agent_runtime.host.rollouts import ROLLOUT_ENABLED_SETTING, rollout_directory
+    from xgen_rsi.base.host.rollouts import ROLLOUT_ENABLED_SETTING, rollout_directory
 
     client = ScriptedClient([text_step("done")])
     host = FakeHost(settings={ROLLOUT_ENABLED_SETTING: "1"}, storage_root=str(tmp_path))
@@ -112,9 +112,9 @@ def test_rollout_uses_the_existing_format(monkeypatch, tmp_path):
 
 def test_cli_provider_owns_the_loop_and_events_stream(monkeypatch):
     """CLI 공급자는 자기 루프를 돈다 — 커널은 호출 1회, 도구 사건은 CLI 스트림에서 번역한다."""
-    from xgen_agent_runtime.core.state import TokenUsage
-    from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
-    from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
+    from xgen_rsi.base.core.state import TokenUsage
+    from xgen_rsi.base.llm_client.base import BaseClient, ClientCapabilities
+    from xgen_rsi.base.llm_client.types import APIResponse, ContentBlock
 
     class _CLI(BaseClient):
         provider = "claude_code_cli"

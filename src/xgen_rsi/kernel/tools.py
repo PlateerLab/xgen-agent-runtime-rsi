@@ -1,6 +1,6 @@
 """도구 실행 — 커널 소유(권한·HITL·사용자 거부·반복 차단·읽기 장부·결과 필터는 하네스가 끌 수 없다).
 
-실행 자체는 기존 런타임의 ``ToolStage.dispatch_calls`` 를 그대로 쓴다. 그 함수는 SDK 루프와 CLI 도구
+실행 자체는 바탕 런타임(``xgen_rsi.base``)의 ``ToolStage.dispatch_calls`` 를 그대로 쓴다. 그 함수는 SDK 루프와 CLI 도구
 표면(``host.tool_surface``)이 함께 쓰는 **유일한 도구 실행 경로**라서(2026-09-30 감사), 새 엔진도 같은
 경로를 지나야 도구가 백엔드·엔진과 무관하게 같게 군다. 이것은 21-stage 파이프라인을 쓰는 것이 아니라
 도구 ABI 계약 계층을 쓰는 것이다 — 파이프라인 객체 없이 실행 서비스로만 만든다.
@@ -10,13 +10,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from xgen_agent_runtime.stages.s10_tool.artifact.default.executors import (
+from xgen_rsi.base.stages.s10_tool.artifact.default.executors import (
     ParallelExecutor,
     PartitionExecutor,
     SequentialExecutor,
 )
-from xgen_agent_runtime.stages.s10_tool.artifact.default.stage import ToolStage
-from xgen_agent_runtime.tools.base import ToolContext
+from xgen_rsi.base.stages.s10_tool.artifact.default.stage import ToolStage
+from xgen_rsi.base.tools.base import ToolContext
 
 _EXECUTORS = {
     "sequential": SequentialExecutor,

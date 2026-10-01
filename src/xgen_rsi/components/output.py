@@ -1,6 +1,6 @@
 """output_plumbing 구성요소 — 모델 응답에서 글·도구 호출·완료 신호를 읽고, 구조화 출력을 정착시킨다.
 
-파서·신호 탐지기는 기존 런타임의 것을 쓴다(``DefaultParser``/``StructuredOutputParser``,
+파서·신호 탐지기는 바탕 런타임(``xgen_rsi.base``)의 것을 쓴다(``DefaultParser``/``StructuredOutputParser``,
 ``RegexDetector``). 완료 신호 마커(``[COMPLETE]`` 등)는 **선택 신호**일 뿐이다 — 이 하네스의 기본 완료 판정은
 "도구 호출이 없는 응답"이라는 구조 신호다(control_flow 쪽, 설계 30 문서 §6).
 """
@@ -33,11 +33,11 @@ class ParseOutputComponent(Component):
     def _ensure(self, schema: Optional[Dict[str, Any]]) -> None:
         if self._parser is not None:
             return
-        from xgen_agent_runtime.stages.s09_parse.artifact.default.parsers import (
+        from xgen_rsi.base.stages.s09_parse.artifact.default.parsers import (
             DefaultParser,
             StructuredOutputParser,
         )
-        from xgen_agent_runtime.stages.s09_parse.artifact.default.signals import (
+        from xgen_rsi.base.stages.s09_parse.artifact.default.signals import (
             HybridDetector,
             RegexDetector,
             StructuredDetector,
@@ -62,7 +62,7 @@ class ParseOutputComponent(Component):
             thinking_texts=list(getattr(parsed, "thinking_texts", None) or []),
         )
         if parsed.text and self.param("completion_markers", True):
-            from xgen_agent_runtime.stages.s09_parse.interface import CompletionSignal
+            from xgen_rsi.base.stages.s09_parse.interface import CompletionSignal
 
             signal, detail = self._detector.detect(parsed.text)
             if signal != CompletionSignal.NONE:
@@ -89,6 +89,6 @@ class ParseOutputComponent(Component):
     def settle(self, text: str, schema: Optional[Dict[str, Any]]) -> str:
         if not schema:
             return text
-        from xgen_agent_runtime.host.runner import settle_structured
+        from xgen_rsi.base.host.runner import settle_structured
 
         return settle_structured(text, schema)

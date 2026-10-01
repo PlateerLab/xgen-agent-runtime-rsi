@@ -128,7 +128,7 @@ class PreparedTurn:
         path = getattr(self.plan, "rollout_path", None)
         if path is None:
             return
-        from xgen_agent_runtime.core.rollout_recorder import RolloutRecorder
+        from xgen_rsi.base.core.rollout_recorder import RolloutRecorder
 
         async def _make() -> Any:
             # 기록기는 실행 중인 이벤트 루프 안에서 만들어야 한다(자기 쓰기 태스크를 그 루프에 건다).
@@ -153,7 +153,7 @@ class PreparedTurn:
         except Exception:  # noqa: BLE001
             logger.error("rsi: rollout recorder shutdown failed", exc_info=True)
         try:
-            from xgen_agent_runtime.host.rollouts import ROLLOUT_KEEP_LAST, prune_rollout_files
+            from xgen_rsi.base.host.rollouts import ROLLOUT_KEEP_LAST, prune_rollout_files
 
             path = os.fspath(self.plan.rollout_path)
             loop.run_until_complete(asyncio.to_thread(prune_rollout_files, os.path.dirname(path), keep_last=ROLLOUT_KEEP_LAST))
@@ -184,7 +184,7 @@ class PreparedTurn:
         state = self.plan.state
         if self.recorder is not None:
             try:
-                from xgen_agent_runtime.host.harness_components import harness_summary
+                from xgen_rsi.base.host.harness_components import harness_summary
 
                 summary = harness_summary(state) or {}
                 keep = getattr(self.recorder, "_keep_content", False)
@@ -204,7 +204,7 @@ class PreparedTurn:
         if unfinished and provider is not None:
             from types import SimpleNamespace
 
-            from xgen_agent_runtime.host.runner import _record_unfinished_turn
+            from xgen_rsi.base.host.runner import _record_unfinished_turn
 
             _record_unfinished_turn(
                 SimpleNamespace(_memory_provider=provider),  # type: ignore[arg-type]
@@ -218,7 +218,7 @@ class PreparedTurn:
             calls, failures, blocked = _tool_stats(state)
             spec = self.plan.memory_distill_spec
             try:
-                from xgen_agent_runtime.host.execution_record import record_turn_execution
+                from xgen_rsi.base.host.execution_record import record_turn_execution
 
                 text = input_text if isinstance(input_text, str) else str((input_text or {}).get("text", "") if isinstance(input_text, dict) else input_text)
                 loop.run_until_complete(
@@ -251,7 +251,7 @@ class PreparedTurn:
             spec = self.plan.memory_distill_spec
             if spec is not None:
                 try:
-                    from xgen_agent_runtime.host.distill import launch_distillation
+                    from xgen_rsi.base.host.distill import launch_distillation
 
                     launch_distillation(spec)
                 except Exception:  # noqa: BLE001
@@ -292,8 +292,8 @@ class RSITurnExecutor:
     """턴 조립이 끝난 :class:`TurnPlan` 으로 도는 RSI 실행 코어(``prepare`` → ``execute``)."""
 
     def prepare(self, plan: Any, host: Any) -> PreparedTurn:
-        from xgen_agent_runtime.core.config import ModelConfig
-        from xgen_agent_runtime.host.runner import build_client
+        from xgen_rsi.base.core.config import ModelConfig
+        from xgen_rsi.base.host.runner import build_client
 
         harness_dir, lineage = resolve_harness_dir(host, plan.provider, plan.model)
         manifest, version = load_cached(harness_dir)
@@ -373,7 +373,7 @@ class RSITurnExecutor:
         registry = plan.registry
         if contributed:
             if registry is None and not plan.is_cli:
-                from xgen_agent_runtime.tools import ToolRegistry
+                from xgen_rsi.base.tools import ToolRegistry
 
                 registry = ToolRegistry()
                 rt.registry = registry
@@ -384,7 +384,7 @@ class RSITurnExecutor:
 
         tools: Optional[ToolRunner] = None
         if not plan.is_cli and registry is not None and len(registry):
-            from xgen_agent_runtime.host.runner import ensure_surface_entrances
+            from xgen_rsi.base.host.runner import ensure_surface_entrances
 
             ensure_surface_entrances(registry)
             tool_policy = harness.maybe("client_tool")
@@ -415,7 +415,7 @@ class RSITurnExecutor:
         if plan.streaming:
             turn_iter = driver.stream()
             if plan.clamped and plan.schema is None:
-                from xgen_agent_runtime.host.context_budget import CLAMP_NOTICE
+                from xgen_rsi.base.host.context_budget import CLAMP_NOTICE
 
                 def _with_notice(inner: Any) -> Any:
                     yield CLAMP_NOTICE

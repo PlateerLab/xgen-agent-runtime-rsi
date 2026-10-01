@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from xgen_agent_runtime.host import runner as runner_mod
-
 from tests.kernel.fakes import ScriptedClient, text_step
 from xgen_rsi import GenyRSI
+from xgen_rsi.base.host import runner as runner_mod
 from xgen_rsi.evolve.round import _covers, _touched_of, exercised_guard
 from xgen_rsi.evolve.runner import TrialOutcome, _params_read
 from xgen_rsi.harness.runtime import Component, LoadedHarness

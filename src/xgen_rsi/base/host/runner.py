@@ -1,0 +1,1844 @@
+"""Pipeline assembly + sync bridges for the ``agents/geny`` node.
+
+Assembly uses geny-executor's ``PipelineBuilder`` for stage wiring, then
+attaches an explicitly-built LLM client via ``attach_runtime`` — that is the
+library-recommended production path and the only builder-compatible way to
+thread a custom ``base_url`` (vLLM / custom endpoints).
+
+The xgen executor runs ``execute()`` in a worker thread, so both bridges
+drive the async engine on a private event loop, exactly like the harness
+node. ``stream_turn`` translates engine events into xgen stream chunks:
+``text.delta`` → str, tool events → ``{"type": "agent_event", ...}`` dicts
+(the shape agent_node_processor forwards to the chat UI), and — once, after
+the pipeline finishes — ``{"type": "usage", "data": {...}}`` with the turn's
+token/cost totals (:func:`turn_usage`).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+import os
+import re
+import time
+from datetime import datetime
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
+
+from xgen_rsi.base import (
+    CONTINUE_RUN,
+    ClientRegistry,
+    Pipeline,
+    PipelineBuilder,
+    PipelineState,
+    RunStatus,
+)
+from xgen_rsi.base.core.context_prune import DEFAULT_PRUNE_OVER_TOKENS
+from xgen_rsi.base.stages.s16_loop.turn_budget import (
+    DEFAULT_HARD_TOKENS as DEFAULT_TURN_HARD_TOKENS,
+    DEFAULT_SOFT_TOKENS as DEFAULT_TURN_SOFT_TOKENS,
+    budget_stopped,
+)
+from xgen_rsi.base.tools import ToolRegistry
+
+logger = logging.getLogger("editor.geny_bridge.runner")
+
+# xgen provider option → geny-executor ClientRegistry key.
+# "vllm" maps to the "custom" OpenAI-compatible profile: geny-executor's own
+# vllm profile disables tool calling (conservative default), while xgen's
+# vLLM deployments serve tool-capable models behind --enable-auto-tool-choice.
+_PROVIDER_MAP = {
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "google": "google",
+    "vllm": "custom",
+    "bedrock": "bedrock",
+    "vertex": "vertex",
+}
+
+_DISPLAY_RESULT_LIMIT = 4000  # chars shown in a tool_result agent_event
+_DISPLAY_TAIL_KEEP = 800  # of which the last N chars are kept (download markers live at the tail)
+
+
+def _map_provider(provider: str) -> str:
+    return _PROVIDER_MAP.get(provider, provider)
+
+
+def build_client(
+    provider: str,
+    api_key: str,
+    base_url: Optional[str],
+    *,
+    credentials: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """provider 문자열 → 런타임 클라이언트.
+
+    ``credentials`` 는 api_key 하나로 부족한 provider(bedrock 의 AWS 키/리전,
+    vertex 의 project/location/서비스계정 JSON)의 다중 필드 자격증명 dict —
+    빈 값은 걸러서 생성자 표면에 그대로 전달한다 (keyword-only: 기존
+    ``build_client(provider, api_key, base_url)`` 호출·monkeypatch 는 그대로
+    유효하다).
+    """
+    key = _map_provider(provider)
+    if key == "custom" and not base_url:
+        raise ValueError(
+            "vLLM/custom provider requires a Base URL (parameter or VLLM_API_BASE_URL config)"
+        )
+    client_cls = ClientRegistry.get(key)
+    kwargs: Dict[str, Any] = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    for cred_key, cred_val in (credentials or {}).items():
+        if cred_val not in (None, ""):
+            kwargs[cred_key] = cred_val
+    return client_cls(**kwargs)
+
+
+# Claude Code CLI 의 네이티브 fs/셸 도구 (참고용 부분집합 — 실제 차단 단위는
+# 아래 CLI_NATIVE_TOOL_CATALOG 전체다).
+_CLI_LOCAL_TOOLS = (
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "LS",
+)
+
+#: CLI 의 **세션 한정 스케줄** 도구 — 항상 차단한다.
+#:
+#: CronCreate/ScheduleWakeup 류는 CLI 프로세스 메모리에 산다: 대화가 끝나면
+#: 큐도 죽고 디스크에도 안 남는다. 에이전트는 "5분마다 실행하도록 걸어놨다"고
+#: 답했지만 세션이 끝나는 순간 사라졌다 (프로드 실증 — 사용자에게는 "된다더니
+#: 안 도는" 기능이다). XGEN 의 영구 작업은 JobSchedule(서버 스케줄러, DB)이
+#: 담당한다 — 같은 일을 하는 반쪽 도구가 곁에 있으면 모델은 반드시 그걸 집는다.
+_CLI_SESSION_SCHED_TOOLS = ("CronCreate", "CronDelete", "CronList", "ScheduleWakeup")
+
+#: Claude Code 네이티브 도구 **차단 상위집합** — ``allow_local_tools=False`` 일 때
+#: 통째로 ``--disallowedTools`` 로 나가는 집합이다.
+#:
+#: 왜 "카탈로그" 가 아니라 "상위집합" 인가
+#: ---------------------------------------
+#: 예전 이름은 CLI_NATIVE_TOOL_CATALOG 였고 12종이었다. 그 이름이 거짓말이었다 —
+#: CLI 의 카탈로그가 아니라 **우리가 그때 알던 목록**이었고, CLI 가 도구를 늘리는
+#: 동안 아무도 알아채지 못했다. 2026-09-09 실측(CLI 2.1.x): CLI 가 27종을 광고했고
+#: 그중 12종만 막고 있었다. 15종이 새고 있었고, 우리 목록의 6종은 이미 없는
+#: 이름이었다(죽은 항목).
+#:
+#: 그 15종 중 하나가 ``Skill`` 이다. 에이전트가 앱을 만들다 CLI 번들 스킬
+#: (dataviz)을 열었고, 그 스킬이 가리킨 파일은 **워크플로우 파드의 /tmp** 에 있는데
+#: Read 는 러너 샌드박스로 가므로 닿을 수 없었다. 더 나쁜 것은 그 스킬이 **다른
+#: 제품**(Claude Code 의 Artifact)을 설명한다는 것이다 — HTML·window.claude.*·
+#: cdnjs 로드. 우리 앱은 AppCreate/AppPublish 로 세우는 FastAPI + React 앱이다.
+#:
+#: 그래서 규칙을 바꾼다: **지금 아는 것을 막는다** 가 아니라 **알던 것을 전부 막고,
+#: 새로 나타나면 알린다**(:func:`native_tool_leaks`). 모르는 이름을 넣는 것은
+#: 안전하다 — 실측으로 확인했다(exit 0, stderr 없음). 그러니 상위집합이 맞다.
+#:
+#: 고정점으로 구한 목록이다. CLI 의 init 이벤트가 알리는 ``tools`` 는 **카탈로그가
+#: 아니라 현재 활성 목록**이라, 26종을 막자 Glob·Grep 이 새로 나타났다. 그것까지
+#: 막아 0종이 될 때까지 반복해 얻은 것이 아래다.
+CLI_NATIVE_TOOLS_DENY = (
+    # ── 파일·셸 (같은 능력을 우리 런타임이 MCP 로 준다) ────────────────
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "LS",
+    # ── 바깥 (우리 WebFetch/WebSearch 가 대신한다) ──────────────────────
+    "WebFetch",
+    "WebSearch",
+    # ── 세션 한정 스케줄 — 대화가 끝나면 큐도 죽는다. 영구 작업은 JobSchedule.
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    # ── CLI 자체 하위 에이전트 — 플랫폼에는 하위 에이전트가 없다(4.71.0 에서 제거).
+    #    CLI 가 제 안에서 띄우면 우리 도구 표면·기록·권한을 통째로 우회한다.
+    "Task",
+    "Agent",
+    "ListAgents",
+    "SendMessage",
+    "TaskOutput",
+    "TaskStop",
+    # ── 스킬·커맨드 표면. --disable-slash-commands 가 목록까지 비우지만,
+    #    도구 이름도 함께 막아 두 겹으로 닫는다.
+    "Skill",
+    "SlashCommand",
+    # ── 다른 제품의 표면 — 우리 것과 이름이 같거나 겹친다.
+    #    Artifact: claude.ai 게시. 우리 것은 앱(AppCreate/AppPublish)이다.
+    #    ToolSearch: 우리 것과 **이름이 같다** — 어느 쪽이 돌았는지 사후에
+    #                구분되지 않는다.
+    "Artifact",
+    "ToolSearch",
+    "Workflow",
+    "DesignSync",
+    "ReportFindings",
+    # ── 하네스 운영 도구 — 서버 턴에는 주인이 없다.
+    "Monitor",
+    "PushNotification",
+    "RemoteTrigger",
+    "TodoWrite",
+    "AskUserQuestion",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "EnterWorktree",
+    "ExitWorktree",
+    "SendUserFile",
+)
+
+#: 예전 이름 — 배포 순서가 계약이 되지 않게 남긴다. xgen-workflow 가 이 이름으로
+#: import 하므로, 두 레포가 어느 순서로 나가도 ImportError 가 나지 않는다.
+CLI_NATIVE_TOOL_CATALOG = CLI_NATIVE_TOOLS_DENY
+
+
+def native_tool_leaks(announced: Any) -> tuple:
+    """CLI 가 알린 도구 중 **우리가 막지 못한 것** — 드리프트 경보.
+
+    ``--disallowedTools`` 는 세션이 시작되기 **전에** 정해지므로, 그 세션의 init
+    으로 그 세션의 목록을 만들 수는 없다. 대신 닫아 둔 문을 세션마다 **검산**한다:
+    init 이 도구를 하나라도 알리면 상위집합이 뒤처졌다는 뜻이다.
+
+    이 검산이 없으면 드리프트는 아무 신호도 내지 않는다 — 도구는 조용히 살아
+    있고, 에이전트만 다르게 행동한다(2026-09-09 Skill 사고가 정확히 그랬다).
+
+    ``mcp__`` 로 시작하는 이름은 우리 브릿지다 — 그건 남아야 정상이다.
+    """
+    deny = set(CLI_NATIVE_TOOLS_DENY)
+    out = []
+    for name in announced or ():
+        text = str(name or "")
+        if not text or text.startswith("mcp__") or text in deny:
+            continue
+        out.append(text)
+    return tuple(out)
+
+
+def _log_native_tool_report(disallowed: Any) -> None:
+    """빌드 시점에 **유지/제거된 네이티브 도구 리포트**를 로그로 남긴다.
+
+    ``build_cli_client`` 는 최종 disallow 집합을 아는 유일한 지점이라(서버·커넥터
+    로컬 공통), 여기서 목록을 갈라 출력한다. 정상 상태는 "유지 0개" 다 —
+    유지 목록에 뭔가 남아 있으면 그 도구는 우리 가드를 지나지 않는다는 뜻이므로
+    로그에서 바로 보여야 한다. 리포트가 실행을 막으면 안 되므로 절대 raise 하지 않는다.
+
+    ⚠ **이 리포트는 우리 목록만 본다.** CLI 에 있는데 우리 목록엔 없는 도구는 여기
+    아무 흔적도 남기지 않는다 — 실제로 15종이 그렇게 조용히 살아 있었다(2026-09-09).
+    그쪽을 보는 것은 :func:`native_tool_leaks` 이고, 세션의 init 이벤트를 받는
+    자리에서 검산한다.
+    """
+    try:
+        blocked = set(disallowed or ())
+        kept = [t for t in CLI_NATIVE_TOOLS_DENY if t not in blocked]
+        removed = [t for t in CLI_NATIVE_TOOLS_DENY if t in blocked]
+        logger.info(
+            "claude_code 네이티브 도구 리포트 — 유지 %d개 [%s] · 제거 %d개 [%s]",
+            len(kept),
+            ", ".join(kept) or "(없음)",
+            len(removed),
+            ", ".join(removed) or "(없음)",
+        )
+    except Exception:  # noqa: BLE001 — 리포트는 절대 실행을 막지 않는다
+        pass
+
+
+_CLI_AUTH_MODES = ("api_key", "setup_token", "oauth", "auto")
+
+
+#: Claude Code CLI 에 늘 주는 환경 — 자동 업데이트와 비필수 외부 트래픽을 끈다.
+#: ``CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`` 는 자동 업데이트·오류 보고·텔레메트리·버그
+#: 보고를 한 번에 끈다. 자동 업데이트는 옛 이름으로도 명시해 둔다(버전과 무관하게 확실히).
+CLI_QUIET_ENV: Dict[str, str] = {
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    # MCP 도구 결과 한도(토큰). 결과 크기는 우리 Stage 10 이 정한다(10만 자를 넘는 결과는 파일로 옮기고
+    # 짧은 안내를 준다). Claude Code 기본(2만 5천 토큰)이 그보다 작아, 같은 결과가 CLI 에서만 잘렸다.
+    "MAX_MCP_OUTPUT_TOKENS": "150000",
+}
+
+
+def build_cli_client(
+    *,
+    auth_mode: str = "api_key",
+    api_key: str = "",
+    oauth_token: str = "",
+    binary_path: str = "",
+    workspace_dir: Optional[str] = None,
+    timeout_s: float = 3600.0,
+    max_budget_usd: float = 0.0,
+    allow_local_tools: bool = False,
+    permission_mode: str = "default",
+    mcp_config: Any = None,
+    settings_path: str = "",
+    allow_tools: Any = (),
+    extra_env: Optional[Dict[str, str]] = None,
+    extra_args: Any = (),
+    prewarm_spawn: Optional[bool] = None,
+) -> Any:
+    """Construct a ``ClaudeCodeCLIClient`` from xgen-resolved settings.
+
+    ``prewarm_spawn`` — hot-spare 프리웜(다음 턴용 CLI 프로세스를 스트림 종료
+    직후 미리 띄움) 토글. ``None``(기본)이면 클라이언트 기본값(env
+    ``GENY_CLI_PREWARM`` 해석)을 그대로 쓴다 — 기존 동작 불변. 서버(xgen-workflow)
+    처럼 파이프라인/클라이언트가 **턴마다 새로** 만들어지는 원샷 호스트는
+    ``False`` 를 넘긴다: 프리웜된 프로세스는 다음 턴이 없어 절대 재사용되지
+    않고 teardown 에 고아로 남는다.
+
+    Auth wiring mirrors Geny's bundle builder — the two footguns it guards:
+    ``--bare``(=bare_mode) is only valid on the api_key channel (it bypasses
+    the OAuth credential file), and subscription modes must NOT forward an
+    API key (a stale key would 401 an otherwise healthy OAuth session).
+    ``setup_token`` injects the long-lived token as ``CLAUDE_CODE_OAUTH_TOKEN``
+    via env_extras — the channel that is safe for server/container use.
+    """
+    if auth_mode not in _CLI_AUTH_MODES:
+        raise ValueError(f"unsupported Claude Code auth_mode: {auth_mode!r}")
+    if auth_mode == "api_key" and not api_key:
+        raise ValueError("Claude Code(api_key 모드): ANTHROPIC_API_KEY 가 설정되어 있지 않습니다")
+    if auth_mode == "setup_token" and not oauth_token:
+        raise ValueError(
+            "Claude Code(setup_token 모드): CLAUDE_CODE_OAUTH_TOKEN 이 설정되어 있지 않습니다"
+        )
+
+    from xgen_rsi.base.llm_client.claude_code import ClaudeCodeCLIClient
+
+    kwargs: Dict[str, Any] = {
+        "auth_mode": auth_mode,
+        "timeout_s": float(timeout_s),
+        "default_permission_mode": permission_mode,
+        # CLI 자체 자동업데이트 차단 — 버전은 service/claude_code/cli_installer 가 관리.
+        # 비필수 트래픽(텔레메트리·오류 보고·버그 보고·업데이트 확인)도 끈다 — 폐쇄망에서
+        # 실행마다 외부 연결을 시도하고, 인터넷이 되는 곳에서도 서버가 보낼 이유가 없다
+        # (2026-09-23 감사 F18).
+        "env_extras": dict(CLI_QUIET_ENV),
+    }
+    if auth_mode == "api_key":
+        kwargs["api_key"] = api_key
+        kwargs["bare_mode"] = True
+    else:
+        kwargs["api_key"] = ""
+        kwargs["bare_mode"] = False
+        if auth_mode == "setup_token":
+            kwargs["env_extras"] = {**kwargs["env_extras"], "CLAUDE_CODE_OAUTH_TOKEN": oauth_token}
+    if binary_path:
+        kwargs["binary_path"] = binary_path
+    if workspace_dir:
+        kwargs["workspace_dir"] = workspace_dir
+    if max_budget_usd and float(max_budget_usd) > 0:
+        kwargs["max_budget_usd"] = float(max_budget_usd)
+    # 차단 목록 = (네이티브 차단 시 **카탈로그 전부**) + 세션 한정 스케줄 도구.
+    #
+    # ⚠ 예전엔 여기서 _CLI_LOCAL_TOOLS(fs/셸 9종)만 막아, allow_local_tools=False
+    # 인데도 WebSearch·WebFetch·TodoWrite 세 네이티브가 살아남았다(실측). 우리 규약은
+    # "네이티브는 전부 끄고 우리 런타임 도구만 쓴다" 이므로 **CLI_NATIVE_TOOL_CATALOG
+    # 전체**를 막는다 — Bash 를 포함한 같은 능력은 런타임 레지스트리가 MCP 로 제공한다
+    # (서버=샌드박스 라우팅, 로컬=이 PC 실행. 도구 클래스는 양쪽 동일).
+    #
+    # (예전 ``disallow_tools_extra`` — 위임 배선 시 CLI 의 Task/Agent 를 더 막던
+    # 호출자 추가분 — 은 4.71.0 에서 없앴다. 그 도구들은 위 카탈로그에 이미 있다.)
+    disallowed = list(CLI_NATIVE_TOOL_CATALOG) if not allow_local_tools else []
+    disallowed.extend(t for t in _CLI_SESSION_SCHED_TOOLS if t not in disallowed)
+    # 유지/제거된 네이티브 도구 리포트 (사용자 요구: 선택/제거 도구 각각 출력).
+    _log_native_tool_report(disallowed)
+    if disallowed:
+        kwargs["disallow_tools"] = tuple(disallowed)
+    # Connector Local MCP bridge (agent_geny wires this for the claude_code
+    # backend): mcp_config → --mcp-config <json> + --strict-mcp-config, so the
+    # CLI's ONLY MCP surface is our per-user connector bridge; settings_path →
+    # --settings <json> pre-allows the bridge server so --print (non-interactive)
+    # mode doesn't block every tool call on a permission prompt; allow_tools →
+    # --allowedTools.
+    if mcp_config:
+        kwargs["mcp_config"] = mcp_config
+    if settings_path:
+        kwargs["settings_path"] = settings_path
+    if allow_tools:
+        kwargs["allow_tools"] = tuple(allow_tools)
+    _extra = [str(a) for a in (extra_args or ())]
+    if not allow_local_tools and "--tools" not in _extra:
+        # 네이티브 도구 **전부**를 끈다(CLI 의 내장 도구 집합을 비운다). 위의 이름 차단 목록은
+        # "알던 것" 을 막고, 이 한 줄은 CLI 가 새로 늘린 것까지 막는다 — 새 버전이 도구를 더해도
+        # 우리 표면(MCP 브릿지)만 남는다. 2026-09-30 실측(2.1.280): 이 플래그로 네이티브 0개,
+        # MCP 도구는 그대로.
+        _extra += ["--tools", ""]
+    if _extra:
+        kwargs["extra_args"] = tuple(_extra)
+    if extra_env:
+        # 병합 — setup_token 의 CLAUDE_CODE_OAUTH_TOKEN 등 기존 값을 덮지 않는다.
+        merged = dict(kwargs["env_extras"])
+        for k, v in extra_env.items():
+            merged.setdefault(str(k), str(v))
+        kwargs["env_extras"] = merged
+    if prewarm_spawn is not None:
+        # None 은 전달하지 않는다 — 클라이언트가 env 기본값을 해석하게 둔다.
+        kwargs["prewarm_spawn"] = bool(prewarm_spawn)
+    return ClaudeCodeCLIClient(**kwargs)
+
+
+_CODEX_AUTH_MODES = ("api_key", "oauth")
+
+
+def build_codex_cli_client(
+    *,
+    auth_mode: str = "api_key",
+    api_key: str = "",
+    binary_path: str = "",
+    workspace_dir: Optional[str] = None,
+    timeout_s: float = 3600.0,
+    mcp_config: Any = None,
+    extra_args: Any = (),
+    env_extras: Optional[Dict[str, str]] = None,
+    sandbox_mode: str = "workspace-write",
+    host_tools_only: bool = True,
+) -> Any:
+    """xgen 설정으로 ``CodexCLIClient`` 를 구성한다 (claude 의 build_cli_client 짝).
+
+    ``host_tools_only`` (기본) — codex 네이티브 도구(셸·이미지 보기·하위 에이전트·웹 검색 등)와 codex
+    쪽 지시(권한·환경·스킬·협업 모드)를 끄고, codex 기본 지시를 우리 시스템 프롬프트로 바꾼다. 모델이
+    보는 도구는 호스트 MCP 브릿지(=SDK 경로와 같은 레지스트리)뿐이다(claude 의 ``--tools ""`` 짝).
+
+    ``sandbox_mode`` — codex 자체 OS 샌드박스 모드. ``host_tools_only`` 면 codex 셸이 꺼져
+    있어 의미가 없지만, 끄는 설정을 모르는 codex 버전을 위한 이중 잠금으로 ``"read-only"`` 를
+    준다(러너 세션이 붙은 실행). 러너가 없는 배포에서만 workspace-write.
+
+    인증 채널 배타 계약은 런타임이 집행한다: api_key 모드만 OPENAI_API_KEY 를
+    subprocess 환경에 주입하고, oauth(ChatGPT 구독) 모드는 절대 키를 흘리지
+    않는다 — 키가 남아 있으면 청구 채널이 조용히 뒤집힌다. MCP 서버는
+    ``-c mcp_servers.*`` 오버라이드로 주입되어 파드의 $CODEX_HOME(auth.json)을
+    건드리지 않는다.
+    """
+    if auth_mode not in _CODEX_AUTH_MODES:
+        raise ValueError(f"unsupported Codex auth_mode: {auth_mode!r}")
+    if auth_mode == "api_key" and not api_key:
+        raise ValueError("Codex(api_key 모드): OPENAI_API_KEY 가 설정되어 있지 않습니다")
+
+    from xgen_rsi.base.llm_client.codex import CodexCLIClient
+
+    kwargs: Dict[str, Any] = {
+        "auth_mode": auth_mode,
+        "api_key": api_key if auth_mode == "api_key" else "",
+        "timeout_s": float(timeout_s),
+    }
+    if binary_path:
+        kwargs["binary_path"] = binary_path
+    if workspace_dir:
+        kwargs["workspace_dir"] = workspace_dir
+    if mcp_config:
+        kwargs["mcp_config"] = mcp_config
+    if extra_args:
+        kwargs["extra_args"] = tuple(str(a) for a in extra_args)
+    if env_extras:
+        kwargs["env_extras"] = {str(k): str(v) for k, v in env_extras.items()}
+    if sandbox_mode:
+        kwargs["sandbox_mode"] = str(sandbox_mode)
+    kwargs["host_tools_only"] = bool(host_tools_only)
+    return CodexCLIClient(**kwargs)
+
+
+def _schema_instruction(schema: Dict[str, Any]) -> str:
+    return (
+        "\n\n# Output format\n"
+        "Respond with a single JSON object that conforms to the JSON Schema below. "
+        "Output ONLY the JSON object — no explanations, no markdown fences.\n"
+        + json.dumps(schema, ensure_ascii=False)
+    )
+
+
+def _system_builder(system: str) -> Any:
+    """기본 시스템 프롬프트 + 현재 날짜(volatile) + 이번 턴 안내(volatile)."""
+    from xgen_rsi.base.stages.s03_system.artifact.default.builders import (
+        ComposablePromptBuilder,
+        CustomBlock,
+        DateTimeBlock,
+        TurnNotesBlock,
+    )
+
+    return ComposablePromptBuilder(
+        blocks=[CustomBlock("base", system), DateTimeBlock(), TurnNotesBlock()]
+    )
+
+
+def ensure_surface_entrances(registry: Optional[ToolRegistry]) -> None:
+    """숨긴 도구로 가는 입구를 세운다 — 파이프라인(SDK)과 CLI 표면이 **같은 함수**를 부른다.
+
+    * 숨긴 도구가 하나라도 있으면 ``ToolSearch`` (없으면 숨김이 곧 삭제다).
+    * 자기확장 도구(ForgeTool/PythonEnv/WorkflowSelf…)가 하나라도 있으면 그 문 ``SelfExtendGuide``.
+      문이 없으면 그 도구들은 카탈로그에만 있어 모델이 능력 자체를 모른다(2026-08-18 회귀). 예전엔
+      이 둘을 파이프라인 조립이 세워서, 파이프라인에 레지스트리를 넘기지 않는 CLI 경로에는 문이 없었다.
+
+    이미 있으면 그대로 둔다(여러 번 불러도 같다).
+    """
+    if registry is None:
+        return
+    if registry.list_deferred():
+        from xgen_rsi.base.tools.built_in import ToolSearchTool
+
+        if registry.get("ToolSearch") is None:
+            registry.register(ToolSearchTool(), core=True)
+    if registry.get("SelfExtendGuide") is None:
+        from xgen_rsi.base.tools.built_in import SELF_EXTEND_FAMILY, SelfExtendGuideTool
+
+        if any(registry.get(n) is not None for n in SELF_EXTEND_FAMILY):
+            registry.register(SelfExtendGuideTool(), core=True)
+
+
+def build_pipeline(
+    *,
+    name: str,
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: Optional[str] = None,
+    system_prompt: str = "",
+    registry: Optional[ToolRegistry] = None,
+    max_iterations: int = 20,
+    temperature: float = 0.7,
+    max_tokens: int = 8192,
+    stream: bool = True,
+    output_schema: Optional[Dict[str, Any]] = None,
+    llm_client: Optional[Any] = None,
+    memory_provider: Optional[Any] = None,
+    memory_distill_spec: Optional[Any] = None,
+    tool_context: Optional[Any] = None,
+    tool_result_filter: Optional[Any] = None,
+    context_window_budget: int = 0,
+    enable_compaction: bool = True,
+    credentials: Optional[Dict[str, Any]] = None,
+    enable_prompt_cache: bool = False,
+    enable_deliverable_review: bool = True,
+    repeat_stop_after: Optional[int] = 3,
+    prune_over_tokens: Optional[int] = DEFAULT_PRUNE_OVER_TOKENS,
+    turn_input_budget_tokens: Optional[Tuple[int, int]] = (
+        DEFAULT_TURN_SOFT_TOKENS,
+        DEFAULT_TURN_HARD_TOKENS,
+    ),
+    thinking_level: Optional[str] = None,
+) -> Pipeline:
+    """Assemble a one-shot pipeline for a single node execution.
+
+    ``llm_client`` overrides the provider/api_key/base_url wiring (tests).
+    The System stage is always registered — it is what publishes the tool
+    registry onto ``state.tools``, so it must exist even for an empty prompt.
+
+    When the registry holds deferred tools (2.42.0 exposure model), the
+    built-in ``ToolSearch`` is registered as core so the discovery path is
+    never stranded — mirrors the library's ``_ensure_tool_search_reachable``,
+    which only runs on the manifest build path.
+
+    ``memory_provider`` (agents/geny 내장 메모리) — 전달되면 executor 의
+    manifest-memory attach 경로와 동일하게 배선한다: Stage 2(Context) 에
+    ``MemoryAwareRetriever`` (Pinned Facts/Relevant Knowledge 주입), Stage
+    15(Memory) 에 ``ConversationArchivingStrategy`` (STM 기록 + vault
+    conversations/ rollup — 브라우저에 대화가 보이는 경로). provider 수명은
+    호출자 소유 — turn teardown 에서 ``pipeline._memory_provider.close()``
+    가 호출된다 (stream_turn/run_turn 의 finally).
+
+    ``context_window_budget`` — 모델의 실제 컨텍스트 윈도우(토큰). 0 이면
+    executor 기본값(200k)이 쓰이는데, 작은 윈도우 모델(vLLM 32k 등)에서는
+    압축이 트리거되기 전에 provider 400 이 먼저 난다 — 호출자(agent_geny)가
+    token_budget 헬퍼로 해석한 실측/카탈로그 값을 반드시 넘겨야 한다.
+    Stage 2(80% proactive)·Stage 4 guard·Stage 16 토큰-비 루프 정지가 전부
+    이 값을 기준으로 동작한다.
+
+    ``enable_compaction`` — 노드의 "컨텍스트 자동 압축" 토글.
+    True(기본): Stage 2 가 **항상** 등록되고(메모리 유무 무관 — 압축은 메모리
+    기능이 아니다) LLMSummaryCompactor 로 80% 초과 시 같은 모델 요약-압축,
+    Stage 4 에 TokenBudgetGuard 가 등록되어 예산 부족 시 compact→1회 재검사
+    (auto-wire 는 Pipeline._init_state). False: 압축 전면 꺼짐 — Stage 2 는
+    메모리 배선용으로만 등록되고(compaction_enabled=False → 프루닝·요약·
+    guard 회복까지 전부 스킵, executor 3.3.0 계약), guard 미등록.
+
+    ``prune_over_tokens`` — 결정적 prune 의 **비용 트리거** (4.35.0,
+    core/context_prune.py). 예상 프롬프트가 이 토큰 수를 넘으면 매 반복 앞에서
+    중복 도구 결과·오래된 거대 결과·stale 이미지를 정리한다(LLM 없음, 메시지
+    수·순서·tool_use_id 보존, 최근 6메시지는 손대지 않음). 윈도우와 무관하다 —
+    기존 용량 트리거(윈도우×0.8)는 윈도우가 크면 오지 않아서 dev 28일 동안 이
+    패스가 한 번도 돌지 않았다(최대 프롬프트 135k 대 문턱 160k/419k). 기본
+    30,000 은 dev 실사용에서 **5회 이하 턴을 하나도 건드리지 않으면서** 8회 이상
+    턴 14개 중 13개를 덮는 값이다. None/0 이면 끔. ``enable_compaction=False``
+    면 이것도 돌지 않는다(같은 스위치 아래).
+
+    ``repeat_stop_after`` — 반복 거부 종료(4.45.0, stages/s16_loop/repeat_stop.py).
+    하네스가 이 턴에 실행을 거부한 호출(4.29.0 같은 호출·같은 결과 건너뛰기, 4.26.0
+    반복 실패 차단)이 이만큼 쌓이면 "도구 없이 보고하라" 를 붙이고 다음 응답으로 끝낸다.
+    근거: 벤치 033·087·086 에서 건너뛴 호출 95·94·32회, 각 입력 300만 토큰(예산 종료).
+    같은 기간 실사용 0건. None/0 이면 끔.
+
+    ``tool_result_filter`` — 호스트의 도구 결과 필터(4.71.0, ``ToolContext.result_filter``).
+    Stage 10 의 도구 컨텍스트에 싣는다 — ``tool_context`` 를 넘기면 그 객체에, 없으면 스테이지
+    기본 컨텍스트에. ``None`` 이면 손대지 않는다(넘긴 ``tool_context`` 에 이미 있으면 그대로).
+
+    ``enable_deliverable_review`` — 완료 직전 산출물 대조(4.30.0,
+    stages/s16_loop/completion_review.py). ``tool_context`` 가 있을 때만
+    배선된다(파일을 읽을 곳이 있어야 한다). 모델이 이 턴에 쓴/언급한 파일을
+    읽어 존재·행 수·헤더·JSON 유효성을 한 번 보여 주고 요청 조건과 대조하게
+    한다 — 파일을 만든 턴에 왕복 1회 추가.
+
+    ``turn_input_budget_tokens`` — (soft, hard) 턴 누적 입력 토큰 예산 (4.30.0,
+    stages/s16_loop/turn_budget.py). soft 를 넘으면 "마무리하라", hard 를 넘으면
+    "도구 없이 보고하라" 를 붙이고 그다음 응답으로 턴을 끝낸다(정상 완료, 자동
+    이어가기 없음). ``None`` 또는 (0, 0) 이면 예산 없음. 기본 100만/300만 —
+    dev 28일 분포에서 p99(24.8만)의 4배/12배. 300만 초과 턴 3개(0.04%)가 입력의
+    19%(그중 하나가 3,712만·도구 442회로 답 없이 끝남). 100만~300만 구간은 대부분
+    정상적으로 끝난 긴 작업이라 기본값으로 자르지 않는다 — 비용에 민감한
+    에이전트는 노드 파라미터로 낮춘다.
+    """
+    ensure_surface_entrances(registry)
+
+    system = system_prompt or ""
+    if output_schema:
+        system += _schema_instruction(output_schema)
+
+    model_opts: Dict[str, Any] = {
+        "temperature": float(temperature),
+        "max_tokens": int(max_tokens),
+        "stream": bool(stream),
+        "max_iterations": int(max_iterations),
+    }
+    if context_window_budget and int(context_window_budget) > 0:
+        # PipelineConfig 필드 → attach 시 state.context_window_budget 로 전파.
+        model_opts["context_window_budget"] = int(context_window_budget)
+    if thinking_level:
+        # 생각의 표준 값 — 클라이언트가 이 모델이 받는 요청으로 옮긴다(llm_client.thinking).
+        model_opts["thinking_level"] = str(thinking_level)
+
+    builder = (
+        PipelineBuilder(name, api_key=api_key, model=model)
+        # 빌더의 모델명 추론 아티팩트(gpt-*→openai, gemini-*→google)에는 api_key
+        # 필수 검증이 딸려 있다. 이 파이프라인은 항상 attach_runtime(llm_client,
+        # override_manifest=True) 로 명시 클라이언트를 붙이므로 빌더 기본
+        # 스테이지는 스캐폴딩일 뿐 — vertex(SA/ADC, 키 없음)·codex(빌더 층 키
+        # 없음)가 유령 검증에 죽지 않도록 기본 아티팩트로 고정한다.
+        .with_artifact("s06_api", "default")
+        .with_model(model, **model_opts)
+        # 현재 날짜·시각(DateTimeBlock, volatile → 캐시 접두 밖 턴 맥락)을 싣는다. 없으면 모델은 오늘을
+        # 모른 채 "다음 주 화요일" 같은 요청을 받는다(2026-09-26 dev 실사용 점검: 메일 초안이 날짜를 비워
+        # 두고 "6월 12일" 같은 예시를 들었다). 메모리 배선(아래)은 같은 블록을 포함한 빌더로 교체한다.
+        .with_system(prompt=system, builder=_system_builder(system))
+        .with_loop(max_turns=int(max_iterations))
+    )
+    if enable_prompt_cache:
+        # Stage 5 — 도구 정의·시스템·안정 이력에 cache_control 표시. 표시는
+        # provider 가 anthropic/bedrock 일 때만 붙는다(_supports_cache_control);
+        # 나머지는 provider 자동 접두 캐시에 맡긴다. 기본 off: 켜면 보고되는
+        # input_tokens 가 캐시 읽기만큼 줄어드므로, 호스트가 cache_read/creation
+        # 토큰을 기록·과금에 반영한 뒤에 켠다.
+        builder.with_cache(strategy="aggressive")
+    if registry is not None and len(registry):
+        builder.with_tools(registry=registry)
+
+    # ── Stage 2(Context) — 항상 등록 ─────────────────────────────
+    # 이전에는 memory_provider 가 있을 때만 등록해서, 기억을 끈 에이전트는
+    # 이력이 아무리 커져도 **어떤 압축도 없이** provider 400 으로 죽었다.
+    # 압축은 메모리 기능이 아니라 컨텍스트 위생이다 — 항상 등록한다.
+    # LLMSummaryCompactor 는 state.model/llm_client 로 자가-배선되어 진짜
+    # 요약을 만들고, 클라이언트가 없으면 정적 플레이스홀더로 강등된다.
+    from xgen_rsi.base.stages.s02_context.artifact.default.compactors import (
+        LLMSummaryCompactor,
+    )
+
+    builder.with_context(
+        compactor=LLMSummaryCompactor(),
+        compaction_enabled=bool(enable_compaction),
+        prune_over_tokens=prune_over_tokens,
+        # 원샷 호스트 계약 (executor 3.3.1): 이 파이프라인은 턴마다 새로
+        # 만들어져 "다음 턴" 이 없다 — 80~90% 구간의 백그라운드 요약 유예는
+        # 결과가 항상 버려지고(낭비 LLM 콜) 태스크가 teardown 에 샌다.
+        # False → 80% 트리거가 항상 동기로 압축한다.
+        background_compaction=False,
+    )
+
+    if enable_compaction:
+        # Stage 4 guard — 다음 요청(system+messages+tools 추정)이 응답 헤드룸을
+        # 남기지 못하면 "compact" 신호 → GuardStage 가 Stage 2 의 압축기로
+        # 이력을 줄이고 1회 재검사, 그래도 안 되면 명확한 메시지로 거절
+        # (provider 400 보다 진단 가능). 헤드룸은 출력 max_tokens 예약분 —
+        # 단, 비정상 설정(max_tokens ≥ 윈도우)에서 매 턴 거절이 되지 않도록
+        # 윈도우의 절반을 상한으로 둔다.
+        from xgen_rsi.base.stages.s04_guard.artifact.default.guards import (
+            TokenBudgetGuard,
+        )
+
+        headroom = max(4096, int(max_tokens) + 2048)
+        if context_window_budget and int(context_window_budget) > 0:
+            headroom = min(headroom, max(1024, int(context_window_budget) // 2))
+        builder.with_guard(guards=[TokenBudgetGuard(min_remaining_tokens=headroom)])
+
+    if memory_provider is not None:
+        # ⚠ 스테이지 등록이 선행 조건 — attach_runtime 의 슬롯 배선은 스테이지가
+        # 없으면 **무음 no-op** 이다 (pipeline._set_stage_slot_strategy).
+        # ContextStage(2)는 위에서 항상 등록되므로 MemoryStage(18)만 추가한다.
+        # 이 줄이 빠지면 STM 기록이 조용히 죽는다 (2026-07-13 프로드에서 실제 발생).
+        builder.with_memory()
+    pipeline = builder.build()
+
+    if output_schema:
+        # Swap the default parser for the schema-validating one (register_stage
+        # replaces by order). Validation lands on ParsedResponse; the terminal
+        # settle for the node's text output happens in settle_structured().
+        from xgen_rsi.base.stages.s09_parse import ParseStage
+        from xgen_rsi.base.stages.s09_parse.artifact.default.parsers import (
+            StructuredOutputParser,
+        )
+
+        pipeline.register_stage(ParseStage(parser=StructuredOutputParser(schema=output_schema)))
+
+    if llm_client is not None:
+        client = llm_client
+    elif credentials and any(v not in (None, "") for v in credentials.values()):
+        client = build_client(provider, api_key, base_url, credentials=credentials)
+    else:
+        # 다중 필드 자격증명이 없으면 기존 3-인자 시그니처 그대로 호출 —
+        # 테스트/외부 monkeypatch(lambda provider, api_key, base_url) 보존.
+        client = build_client(provider, api_key, base_url)
+    pipeline.attach_runtime(llm_client=client, override_manifest=True)
+
+    if tool_context is not None:
+        # Stage 10(Tool) 의 ToolContext — working_dir/allowed_paths/extras(ssh·docs)
+        # 를 built-in 도구들에 전달한다 (executor 공식 주입점: attach_runtime).
+        pipeline.attach_runtime(tool_context=tool_context)
+
+        if enable_deliverable_review:
+            # Stage 16 완료 직전 산출물 대조 — Stage 10 이 보는 것과 같은
+            # ToolContext 를 매번 읽는다 (sandbox 는 attach_runtime(sandbox=)
+            # 로 나중에 붙을 수 있다).
+            from xgen_rsi.base.stages.s16_loop.completion_review import DeliverableReviewer
+
+            tool_stage = pipeline.get_stage(10)
+            loop_stage = pipeline.get_stage(Pipeline.LOOP_END)
+            if tool_stage is not None and hasattr(loop_stage, "add_completion_reviewer"):
+                loop_stage.add_completion_reviewer(  # type: ignore[union-attr]
+                    DeliverableReviewer(lambda: getattr(tool_stage, "_context", None))
+                )
+
+    if tool_result_filter is not None:
+        # attach_runtime(tool_context=) 뒤라야 한다 — 그 호출이 스테이지 컨텍스트를 갈아 끼운다.
+        _tool_stage = pipeline.get_stage(10)
+        _stage_ctx = getattr(_tool_stage, "_context", None) if _tool_stage is not None else None
+        if _stage_ctx is not None:
+            _stage_ctx.result_filter = tool_result_filter
+
+    if repeat_stop_after and int(repeat_stop_after) > 0:
+        # 반복 거부 종료(4.45.0, s16_loop/repeat_stop.py) — 하네스가 실행을 거부한 호출이
+        # 이만큼 쌓이면 보고를 받고 턴을 끝낸다. 건너뛰기만 하면 모델이 안내를 무시하고
+        # 300만 토큰까지 같은 호출을 되풀이했다(033·087·086).
+        from xgen_rsi.base.stages.s16_loop.repeat_stop import RepeatStop
+
+        loop_stage = pipeline.get_stage(Pipeline.LOOP_END)
+        if hasattr(loop_stage, "set_repeat_stop"):
+            loop_stage.set_repeat_stop(RepeatStop(stop_after=int(repeat_stop_after)))  # type: ignore[union-attr]
+
+    soft, hard = turn_input_budget_tokens or (0, 0)
+    if int(soft) > 0 and int(hard) > 0:
+        from xgen_rsi.base.stages.s16_loop.turn_budget import TurnInputBudget
+
+        loop_stage = pipeline.get_stage(Pipeline.LOOP_END)
+        if hasattr(loop_stage, "set_turn_input_budget"):
+            loop_stage.set_turn_input_budget(  # type: ignore[union-attr]
+                TurnInputBudget(soft_tokens=int(soft), hard_tokens=int(hard))
+            )
+
+    if memory_provider is not None:
+        # executor 의 from_manifest memory attach 경로 미러 (pipeline.py L1394~):
+        # runtime 객체가 슬롯 선언을 이긴다 — 여기서 직접 슬롯에 배선한다.
+        #
+        # 3-피스 배선 (하나라도 빠지면 기억이 "조용히" 죽는다):
+        #  1) ContextStage.retriever  ← MemoryAwareRetriever
+        #       → state.metadata["memory_pinned"/"memory_context"] 를 채움
+        #  2) MemoryStage.strategy    ← ConversationArchivingStrategy
+        #       → 턴 종료 시 STM(transcripts) 기록
+        #  3) SystemStage.builder     ← ComposablePromptBuilder
+        #       → 기본 StaticPromptBuilder 는 metadata 를 렌더하지 않으므로,
+        #         base 프롬프트 + PinnedFactsBlock(# Pinned Facts) +
+        #         RetrievedMemoryBlock(# Relevant Knowledge) 조합으로 교체.
+        #         (Geny 의 MemoryContextBlock 경로와 동일 — 2.50 분리형 블록 사용)
+        try:
+            from xgen_rsi.base.memory.retriever import MemoryAwareRetriever
+
+            from xgen_rsi.base.host.conversation_archive import ConversationArchivingStrategy
+            from xgen_rsi.base.stages.s03_system.artifact.default.builders import (
+                ComposablePromptBuilder,
+                CustomBlock,
+                DateTimeBlock,
+                PinnedFactsBlock,
+                RetrievedMemoryBlock,
+                TurnNotesBlock,
+            )
+
+            pipeline._memory_provider = memory_provider
+            pipeline.attach_runtime(
+                memory_retriever=MemoryAwareRetriever(memory_provider),
+                memory_strategy=ConversationArchivingStrategy(memory_provider),
+                system_builder=ComposablePromptBuilder(
+                    blocks=[
+                        CustomBlock("base", system),
+                        PinnedFactsBlock(),
+                        DateTimeBlock(),
+                        RetrievedMemoryBlock(),
+                        TurnNotesBlock(),
+                    ]
+                ),
+            )
+            # 턴-종료 증류(distillation) 스펙 — teardown 이 백그라운드로 발사.
+            setattr(pipeline, "_memory_distill_spec", memory_distill_spec)
+            logger.info(
+                "geny_bridge: memory wired (context retriever + memory strategy + prompt blocks)"
+            )
+        except Exception:  # noqa: BLE001 — 메모리는 실행을 깨지 않는다
+            logger.exception("geny_bridge: memory attach failed (memoryless run)")
+    return pipeline
+
+
+# ── structured output settle ────────────────────────────────────────────────
+
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+
+def settle_structured(text: str, schema: Dict[str, Any]) -> str:
+    """Validate the final text against the output schema.
+
+    Success → canonical compact JSON (what downstream nodes parse).
+    Failure → the raw text unchanged, with a warning — a malformed answer
+    must still reach the user (same graceful rule as agent_xgen's parser).
+    """
+    candidate = (text or "").strip()
+    match = _FENCE_RE.search(candidate)
+    if match:
+        candidate = match.group(1).strip()
+    if not candidate.startswith(("{", "[")):
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start != -1 and end > start:
+            candidate = candidate[start : end + 1]
+    try:
+        import jsonschema
+
+        parsed = json.loads(candidate)
+        jsonschema.validate(parsed, schema)
+        return json.dumps(parsed, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "geny_bridge: structured output settle failed (%s) — returning raw text", exc
+        )
+        return text
+
+
+# ── xgen agent_event builders ───────────────────────────────────────────────
+
+
+def _indicator(tool_name: str) -> Optional[Dict[str, Any]]:
+    try:
+        from xgen_rsi.base.host.tool_indicators import get_indicator
+
+        return get_indicator(tool_name)
+    except Exception:  # noqa: BLE001 - indicator metadata is optional UI sugar
+        return None
+
+
+class _CancelRequested(Exception):
+    """대기 중에 정지가 들어왔다."""
+
+
+#: 대기 중 정지를 확인하는 주기(초). 짧을수록 빨리 멈추고, 짧아도 비용은
+#: "아무 일도 없을 때 깨어나기" 뿐이다.
+_CANCEL_POLL_S = 0.2
+
+
+def _notify_loop(on_loop: Optional[Callable[[Any], None]], loop: Any) -> None:
+    """턴 루프가 열리고 닫힐 때 알린다. 알림 실패가 턴을 깨지 않는다."""
+    if on_loop is None:
+        return
+    try:
+        on_loop(loop)
+    except Exception:  # noqa: BLE001
+        logger.warning("geny_bridge: on_loop 콜백 실패 (무시)", exc_info=True)
+
+
+def _next_event(loop: Any, agen: Any, cancel_check: Optional[Callable[[], bool]]) -> Any:
+    """다음 이벤트를 **기다리면서도 정지를 듣는다.**
+
+    예전에는 ``loop.run_until_complete(agen.__anext__())`` 였다. 그러면 정지
+    확인은 **이벤트와 이벤트 사이에서만** 일어난다 — 긴 도구 실행이나 긴 모델
+    대기 중에는 아무도 듣지 않는다. 사용자가 [정지]를 눌러도 화면은 계속
+    흘렀고, 그 도구가 끝나야 비로소 멈췄다.
+
+    그래서 기다리는 동안에도 주기적으로 깨어나 확인한다. 정지면 대기 중인
+    작업을 **취소한다** — 그 취소가 파이프라인을 타고 내려가 CLI 프로세스
+    정리(_cli_runtime 의 finally)까지 즉시 닿는다.
+
+    ``cancel_check`` 이 없으면 예전과 똑같이 그냥 기다린다.
+    """
+    if cancel_check is None:
+        return loop.run_until_complete(agen.__anext__())
+
+    task = loop.create_task(agen.__anext__())
+    while True:
+        done, _pending = loop.run_until_complete(asyncio.wait({task}, timeout=_CANCEL_POLL_S))
+        if done:
+            return task.result()  # StopAsyncIteration 은 그대로 올라간다
+        try:
+            wants_stop = bool(cancel_check())
+        except Exception:  # noqa: BLE001 — 확인 실패가 턴을 죽이면 안 된다
+            wants_stop = False
+        if wants_stop:
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                loop.run_until_complete(task)
+            raise _CancelRequested()
+
+
+def _attach_tool_use_id(event: Dict[str, Any], tool_use_id: Any) -> None:
+    """도구 사건에 **어느 호출인지**를 싣는다 — ``tool_use_id`` 와 ``run_id`` (같은 값).
+
+    이름만으로는 짝을 맞출 수 없다: 같은 도구를 한 턴에 두 번 부르거나 동시에
+    부르면 시작과 끝이 엇갈린다. 호스트(xgen-workflow)는 ``run_id`` 로 도구
+    사건을 메시지에 모으는데 이 값이 늘 없어서 칩·로그가 전부 비었다.
+
+    id 가 없으면 키를 싣지 않는다 — 빈 문자열을 실으면 소비자가 "있음" 으로
+    읽고 이름 기반 폴백을 건너뛴다.
+    """
+    if tool_use_id is None:
+        return
+    value = tool_use_id if isinstance(tool_use_id, str) else str(tool_use_id)
+    if not value:
+        return
+    event["tool_use_id"] = value
+    event["run_id"] = value
+
+
+def _tool_call_event(
+    name: str,
+    tool_input: Any,
+    *,
+    tool_use_id: Any = None,
+) -> Dict[str, Any]:
+    event: Dict[str, Any] = {
+        "type": "tool_call",
+        "tool_name": name,
+        "tool_input": tool_input
+        if isinstance(tool_input, str)
+        else json.dumps(tool_input or {}, ensure_ascii=False, default=str),
+        "timestamp": datetime.now().isoformat(),
+    }
+    _attach_tool_use_id(event, tool_use_id)
+    indicator = _indicator(name)
+    if indicator:
+        event["indicator"] = indicator
+    return event
+
+
+def _display_result(text: str) -> str:
+    """tool_result 표시용 축약 — 머리+꼬리를 남긴다.
+
+    문서 도구는 결과 **끝**에 다운로드 마커를 붙인다(서버가 download_artifact 로 승격).
+    단순 head 절단이면 4000자를 넘는 결과의 마커가 잘려 다운로드 버튼이 사라진다.
+    """
+    if len(text) <= _DISPLAY_RESULT_LIMIT:
+        return text
+    head = _DISPLAY_RESULT_LIMIT - _DISPLAY_TAIL_KEEP
+    omitted = len(text) - head - _DISPLAY_TAIL_KEEP
+    return f"{text[:head]}\n…[{omitted} chars truncated]…\n{text[-_DISPLAY_TAIL_KEEP:]}"
+
+
+def _tool_end_event(
+    name: str,
+    result_text: str,
+    *,
+    is_error: bool = False,
+    duration_ms: Optional[int] = None,
+    tool_use_id: Any = None,
+) -> Dict[str, Any]:
+    if is_error:
+        event: Dict[str, Any] = {
+            "type": "tool_error",
+            "tool_name": name,
+            "error": result_text or "tool execution failed",
+        }
+    else:
+        event = {
+            "type": "tool_result",
+            "tool_name": name,
+            "result": _display_result(result_text),
+            "result_length": len(result_text),
+            "citations": None,
+        }
+    event["timestamp"] = datetime.now().isoformat()
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    _attach_tool_use_id(event, tool_use_id)
+    indicator = _indicator(name)
+    if indicator:
+        event["indicator"] = indicator
+    return event
+
+
+def _stringify_content(content: Any) -> str:
+    """도구 결과 content → **사람이 읽는 텍스트**.
+
+    CLI 백엔드의 tool_result 는 보통 블록 리스트로 온다::
+
+        [{"type": "text", "text": "(no output)"}]
+
+    이걸 그대로 ``json.dumps`` 하면 모델도 화면도 봉투를 읽는다 —
+    ``[{"type": "text", "text": "(no output)"}]``. 짧은 결과일수록 봉투가
+    내용보다 크고, 에러 한 줄은 그 안에 파묻힌다. CLI 백엔드로 도는 모든 턴의
+    **모든** 도구 결과가 이 모양이었다.
+
+    그래서 텍스트 블록은 꺼내서 잇는다. 텍스트가 아닌 블록(이미지 등)은 종류를
+    한 줄로 남긴다 — 조용히 버리면 "결과가 비었다" 로 보이기 때문이다.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return _stringify_content([content])
+    if isinstance(content, list):
+        parts: list = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                parts.append(str(block))
+                continue
+            btype = str(block.get("type") or "")
+            if btype == "text" or "text" in block:
+                parts.append(str(block.get("text") or ""))
+            elif btype:
+                parts.append(f"[{btype}]")
+            else:
+                try:
+                    parts.append(json.dumps(block, ensure_ascii=False, default=str))
+                except (TypeError, ValueError):
+                    parts.append(str(block))
+        joined = "\n".join(p for p in parts if p)
+        if joined:
+            return joined
+        # 블록은 있는데 뽑을 텍스트가 없다 — 원문을 주는 편이 침묵보다 낫다.
+    try:
+        return json.dumps(content, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(content)
+
+
+# ── turn usage (토큰/비용 집계 → ``usage`` 청크) ─────────────────────────────
+
+
+def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, Any]]:
+    """턴 1회의 토큰/비용 집계 — 호스트 간 공통 ``usage`` 페이로드.
+
+    출처는 Stage 7(TokenStage) 이 API 호출마다 ``state.turn_token_usage`` 에
+    쌓는 per-call ``TokenUsage`` (SDK 경로·CLI 경로 모두 Stage 6 이
+    ``last_api_response`` 로 올려 Stage 7 이 추적한다; ``begin_turn`` 이
+    턴 시작마다 비우므로 합계 = 이 턴의 총량). 비용은 provider 가 직접
+    보고한 값(Claude Code result envelope 의 ``total_cost_usd`` →
+    ``TokenUsage.cost_usd``)을 우선하고, 없으면 Stage 7 계산기의 per-turn
+    누적(``state.total_cost_usd``, 0 이면 미상)을 쓴다.
+
+    반환 shape (크로스-레포 계약 — 커넥터 TurnReport.usage / 서버 report-turn
+    output_data.usage / trace.record_llm_usage 가 그대로 읽는다)::
+
+        {"input_tokens": int, "output_tokens": int,
+         "cache_read_tokens": int|None, "cache_creation_tokens": int|None,
+         "total_cost_usd": float|None, "model": str|None, "provider": str|None,
+         "calls": int, "first_call_prompt_tokens": int, "max_call_prompt_tokens": int,
+         "harness": {"components": {name: int}, "fast_path": {...}}  # 있을 때만
+        }
+
+    사용량이 전혀 기록되지 않은 턴(API 호출 0회 — 가드 거절·즉시 오류)은
+    ``None`` — 호출자는 이때 usage 청크를 내지 않는다.
+    """
+    from xgen_rsi.base.core.state import TokenUsage
+
+    calls = list(getattr(state, "turn_token_usage", None) or [])
+    if not calls:
+        return None
+    total = TokenUsage()
+    for u in calls:
+        if isinstance(u, TokenUsage):
+            total += u
+    cost: Optional[float] = total.cost_usd
+    if cost is None:
+        turn_cost = getattr(state, "total_cost_usd", 0.0) or 0.0
+        cost = float(turn_cost) if turn_cost > 0 else None
+    last = getattr(state, "last_api_response", None)
+    model = str(getattr(last, "model", "") or "") or str(getattr(state, "model", "") or "")
+    provider = ""
+    try:
+        resolver = getattr(pipeline, "_resolved_provider_name", None)
+        if callable(resolver):
+            provider = str(resolver(state) or "")
+    except Exception:  # noqa: BLE001 — 진단용 라벨일 뿐
+        provider = ""
+    if not provider:
+        provider = str(getattr(getattr(state, "llm_client", None), "provider", "") or "")
+    # Anthropic/Bedrock 은 캐시분을 input_tokens 밖에서 따로 보고하고, OpenAI 계열은
+    # prompt_tokens 안에 이미 포함한다 — 더하면 이중 집계다.
+    _cache_separate = provider in ("anthropic", "bedrock") or (
+        not provider and str(model).startswith("claude")
+    )
+    per_call_prompt = [
+        int(u.input_tokens)
+        + (
+            int(u.cache_read_input_tokens) + int(u.cache_creation_input_tokens)
+            if _cache_separate
+            else 0
+        )
+        for u in calls
+        if isinstance(u, TokenUsage)
+    ]
+    from xgen_rsi.base.host.harness_components import harness_summary
+
+    usage: Dict[str, Any] = {
+        "input_tokens": int(total.input_tokens),
+        "output_tokens": int(total.output_tokens),
+        "cache_read_tokens": int(total.cache_read_input_tokens),
+        "cache_creation_tokens": int(total.cache_creation_input_tokens),
+        "total_cost_usd": float(cost) if cost is not None else None,
+        "model": model or None,
+        "provider": provider or None,
+        # 모델 왕복 수와 호출별 프롬프트 크기(캐시 포함) — 비용 = 앞부분 × 왕복 수를
+        # 추정이 아니라 실측으로 보기 위한 값. 첫 값이 고정 앞부분의 크기다.
+        "calls": len(per_call_prompt),
+        "first_call_prompt_tokens": per_call_prompt[0] if per_call_prompt else 0,
+        "max_call_prompt_tokens": max(per_call_prompt) if per_call_prompt else 0,
+    }
+    # 이번 턴에 작동한 하네스 장치·빠른 경로 판정(있을 때만) — 호스트가 트레이스에 남겨
+    # 장치별 실사용 빈도를 기록만으로 센다.
+    harness = harness_summary(state)
+    if harness:
+        usage["harness"] = harness
+    return usage
+
+
+def _should_record_execution(host: Any, *, produced_output: bool, failed: bool) -> bool:
+    """메모리 실행 기록 여부 — 출력 0 으로 실패한 턴은 host 정책에 따른다.
+
+    ``host.record_failed_starts``(기본 True) 가 False 인 호스트는 "시작도 못 한"
+    턴(텍스트 0 + 오류/취소)을 vault 에 남기지 않는다 — 폴백이 같은 턴을 다시
+    돌려 기록하는 호스트에서 중복 실패 기록이 쌓이지 않게. 성공 턴·출력이
+    있었던 실패 턴은 항상 기록.
+    """
+    if produced_output or not failed:
+        return True
+    return bool(getattr(host, "record_failed_starts", True)) if host is not None else True
+
+
+# ── sync bridges (executor runs execute() in a worker thread) ───────────────
+
+
+def _tool_stats_from_events(state: Any) -> tuple[int, int, int]:
+    """이 턴의 도구 호출·실패·반복 차단 수 — Stage 10 이 남긴 이벤트에서."""
+    calls = failures = blocked = 0
+    for ev in list(getattr(state, "events", None) or []):
+        if not isinstance(ev, dict):
+            continue
+        etype = str(ev.get("type") or "")
+        data = ev.get("data") or {}
+        if etype == "tool.execute_complete":
+            calls += int(data.get("count") or 0)
+            failures += int(data.get("errors") or 0)
+        elif etype == "tool.repeat_blocked":
+            blocked += len(data.get("tools") or []) or 1
+    return calls, failures, blocked
+
+
+def _record_execution(
+    pipeline: Pipeline,
+    loop: asyncio.AbstractEventLoop,
+    *,
+    input_text: str,
+    state: PipelineState,
+    output_text: str,
+    success: bool,
+    duration_ms: int,
+    error: str = "",
+    cancelled: bool = False,
+) -> None:
+    """턴 실행 1회를 메모리에 기록 (Geny record_execution 미러) — teardown 직전.
+
+    provider 가 살아 있는 마지막 지점(_close_memory_provider 직전)에서
+    동기 호출, 상한 10s. 실패는 로그만 — 턴 결과를 절대 바꾸지 않는다.
+    """
+    provider = getattr(pipeline, "_memory_provider", None)
+    if provider is None:
+        return
+    spec = getattr(pipeline, "_memory_distill_spec", None)
+    calls, failures, blocked = _tool_stats_from_events(state)
+    try:
+        from xgen_rsi.base.host.execution_record import record_turn_execution
+
+        loop.run_until_complete(
+            asyncio.wait_for(
+                record_turn_execution(
+                    provider,
+                    input_text=input_text,
+                    output_text=output_text,
+                    success=success,
+                    duration_ms=duration_ms,
+                    session_id=str(getattr(state, "session_id", "") or ""),
+                    provider_name=str(getattr(spec, "provider", "") or "") if spec else "",
+                    model=str(getattr(spec, "model", "") or "") if spec else "",
+                    error=error,
+                    cancelled=cancelled,
+                    tool_calls=calls,
+                    tool_failures=failures,
+                    blocked=blocked,
+                ),
+                timeout=10.0,
+            )
+        )
+    except Exception:  # noqa: BLE001 — 기록은 best-effort
+        logger.debug("geny_bridge: execution record failed (turn unaffected)", exc_info=True)
+
+
+#: 끝나지 못한 턴을 기억에 남길 때 그 턴 끝에 붙이는 표식 — 다음 턴의 단기 기억 창이 이 턴을 "끝나지
+#: 않은 턴" 으로 읽는다. 위의 도구 호출·결과는 그때까지 실제로 한 일이다.
+UNFINISHED_TURN_NOTES = {
+    "cancelled": "[The user stopped this turn before it finished. The steps above are what was done so far.]",
+    "error": "[This turn ended with an error before it finished. The steps above are what was done so far.]",
+}
+
+
+def _record_unfinished_turn(
+    pipeline: Pipeline,
+    loop: asyncio.AbstractEventLoop,
+    *,
+    state: PipelineState,
+    input_text: Any,
+    reason: str,
+) -> int:
+    """끝나지 못한 턴(중단·오류)의 대화를 단기 기억(STM)에 남긴다. 남긴 메시지 수를 돌려준다.
+
+    STM 기록은 Stage 18 이 맡는데, 그 단계는 파이프라인이 끝까지 가야 돈다. 사용자가 [정지] 를
+    누른 턴은 그 전에 끊겨 **질문조차 남지 않았고**, 다음 턴은 "아까 그거" 가 무엇인지 몰랐다
+    (2026-10-01 실측: 중단된 "캐시해서 중복 호출을 막자" 다음 턴이 어느 앱 얘기냐고 되물었다).
+
+    아직 기록되지 않은 메시지(질문·도구 호출·받은 결과)를 그대로 남기고 끝에 표식을 붙인다.
+    Stage 18 과 같은 워터마크를 보므로 이미 기록된 것은 다시 적지 않는다(이어 가기 조각이 끝까지
+    간 부분). 짝이 안 맞는 도구 호출 꼬리는 다음 턴의 창이 고친다(repair_dangling_tool_calls).
+    질문이 상태에 아직 없으면(입력 단계 전에 끊겼다) 받은 입력의 글로 질문을 세운다.
+    실패는 로그만 — 턴 결과를 바꾸지 않는다.
+    """
+    provider = getattr(pipeline, "_memory_provider", None)
+    if provider is None or not callable(getattr(provider, "record_turn", None)):
+        return 0
+    try:
+        from xgen_rsi.base.host.turn_input import TurnInput
+        from xgen_rsi.base.memory.provider import Turn
+        from xgen_rsi.base.memory.short_term_window import WINDOW_LEN_KEY
+        from xgen_rsi.base.memory.transcript import _is_tool_result_only
+        from xgen_rsi.base.stages.s18_memory._dehydrate import dehydrate_message
+        from xgen_rsi.base.stages.s18_memory.artifact.default.stage import (
+            _STATE_LAST_RECORDED,
+            _STRATEGY_RECORDED,
+            _recorded_upto,
+        )
+
+        def _asks(msg: Any) -> bool:
+            return (
+                isinstance(msg, dict)
+                and str(msg.get("role") or "") == "user"
+                and not _is_tool_result_only(msg.get("content"))
+            )
+
+        messages = list(state.messages)
+        start = _recorded_upto(state)
+        pending = [m for m in messages[start:] if isinstance(m, dict)]
+        try:
+            window_len = int(state.metadata.get(WINDOW_LEN_KEY, 0) or 0)
+        except (TypeError, ValueError):
+            window_len = 0
+        if not any(_asks(m) for m in messages[window_len:]):
+            question = TurnInput.from_raw(input_text).text.strip()
+            if question:
+                pending.insert(0, {"role": "user", "content": question})
+        if not pending:
+            return 0  # 끝까지 기록됐다(Stage 18 이 돈 뒤에 끊겼다)
+        note = UNFINISHED_TURN_NOTES.get(reason, UNFINISHED_TURN_NOTES["error"])
+        pending.append({"role": "assistant", "content": note})
+
+        async def _write() -> None:
+            for msg in pending:
+                await provider.record_turn(Turn.from_state_message(dehydrate_message(msg)))
+
+        loop.run_until_complete(asyncio.wait_for(_write(), timeout=10.0))
+        state.metadata[_STATE_LAST_RECORDED] = len(messages)
+        state.metadata[_STRATEGY_RECORDED] = len(messages)
+        logger.info(
+            "geny_bridge: unfinished turn kept in short-term memory (%s, %d messages)",
+            reason,
+            len(pending),
+        )
+        return len(pending)
+    except Exception:  # noqa: BLE001 — 기록 실패가 턴 결과를 바꾸지 않는다
+        logger.warning("geny_bridge: failed to keep the unfinished turn in memory", exc_info=True)
+        return 0
+
+
+def _close_memory_provider(pipeline: Pipeline, loop: asyncio.AbstractEventLoop) -> None:
+    """turn teardown 에서 내장 메모리 provider 를 닫는다.
+
+    ``pipeline.aclose()`` 는 memory provider 를 닫지 않는다(수명은 호스트
+    소유). 같은 스레드/루프 안에서 생성·사용·정리하는 계약을 지키기 위해
+    반드시 turn 의 finally (loop.close() 직전)에서 호출한다.
+    """
+    provider = getattr(pipeline, "_memory_provider", None)
+    if provider is None:
+        return
+    try:
+        loop.run_until_complete(provider.close())
+    except Exception:  # noqa: BLE001 - teardown must not mask the run
+        logger.debug("geny_bridge: memory provider close failed", exc_info=True)
+    # 턴-종료 증류 — Geny compact_now 케이던스의 XGEN 판. 백그라운드 데몬
+    # 스레드가 자기 루프·자기 provider 로 facts/rollup 을 돌리므로 여기(턴
+    # 스레드)는 즉시 반환한다. 실패/미설정은 조용히 스킵.
+    spec = getattr(pipeline, "_memory_distill_spec", None)
+    if spec is not None:
+        try:
+            from xgen_rsi.base.host.distill import launch_distillation
+
+            launch_distillation(spec)
+        except Exception:  # noqa: BLE001
+            logger.debug("geny_bridge: distillation launch failed", exc_info=True)
+
+
+class _RolloutRuntimeOverlay:
+    """Expose a recorder while preserving an existing free-shape runtime."""
+
+    def __init__(self, base: Any, recorder: Any) -> None:
+        self._base = base
+        self.rollout_recorder = recorder
+
+    def __getattr__(self, name: str) -> Any:
+        if self._base is None:
+            raise AttributeError(name)
+        return getattr(self._base, name)
+
+
+async def _attach_rollout_recorder(
+    pipeline: Pipeline,
+    state: PipelineState,
+    rollout_path: str | os.PathLike[str],
+) -> tuple[Any, Any]:
+    """Create and attach a host-owned recorder inside the turn event loop.
+
+    Returns ``(recorder, original_runtime)``.  ``original_runtime`` is the
+    object the state would have seen without the overlay and is restored by
+    teardown so reusing a state never retains a shut-down recorder.
+    """
+    from xgen_rsi.base.core.rollout_recorder import RolloutRecorder
+
+    recorder = RolloutRecorder(rollout_path)
+    original_runtime = state.session_runtime
+    if original_runtime is None:
+        original_runtime = getattr(pipeline, "_attached_session_runtime", None)
+    overlay = _RolloutRuntimeOverlay(original_runtime, recorder)
+    try:
+        pipeline.attach_runtime(session_runtime=overlay)
+        # A caller-supplied state runtime takes precedence over the pipeline's
+        # attached slot in _init_state, so install the same overlay on both.
+        state.session_runtime = overlay
+    except BaseException:
+        await recorder.shutdown()
+        raise
+    return recorder, original_runtime
+
+
+def _close_rollout_recorder(
+    recorder: Any,
+    rollout_path: str | os.PathLike[str],
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Durably stop one recorder and enforce host storage retention."""
+    try:
+        loop.run_until_complete(recorder.shutdown())
+    except Exception:  # noqa: BLE001 — teardown must not mask the turn
+        logger.error("geny_bridge: rollout recorder shutdown failed", exc_info=True)
+    try:
+        from xgen_rsi.base.host.rollouts import ROLLOUT_KEEP_LAST, prune_rollout_files
+
+        loop.run_until_complete(
+            asyncio.to_thread(
+                prune_rollout_files,
+                os.fspath(os.path.dirname(os.fspath(rollout_path))),
+                keep_last=ROLLOUT_KEEP_LAST,
+            )
+        )
+    except Exception:  # noqa: BLE001 — retention is best-effort
+        logger.debug("geny_bridge: rollout retention failed", exc_info=True)
+
+
+#: 반복 한도(max_iterations)에 닿은 턴을 사용자 확인 없이 **자동으로 이어 가는** 최대 횟수.
+#:
+#: 20 이었다. 한 슬라이스가 max_iterations(기본 20, 노드 최대 100) 반복이므로 한 턴이
+#: 최대 21배까지 돌 수 있었고, 실제로 "이거해줘" 한 마디에 도구 120회 이상·입력
+#: 252만 토큰 턴이 나왔다(2026-09-16 dev). 매 반복마다 대화 전체가 모델에 다시
+#: 들어가므로 길이가 곧 비용이다. 2 = 최대 3 슬라이스. 더 필요하면 호스트가
+#: ``max_continuation_slices`` 로 명시한다.
+DEFAULT_MAX_CONTINUATION_SLICES = 2
+
+#: 자동 이어가기 한도에 닿아 멈춘 턴의 사용자 안내. ``task_suspended`` 이벤트를
+#: 모르는 클라이언트(구버전 웹·Dex)에서도 답이 왜 끊겼는지 보이게 한다.
+SUSPEND_NOTICE = (
+    "\n\n[안내: 작업 단계가 한도에 도달해 여기서 멈췄습니다. "
+    "이어서 진행하려면 '계속'이라고 보내 주세요.]"
+)
+
+#: 턴 입력 토큰 예산(stages/s16_loop/turn_budget.py)으로 끝난 턴의 안내. 모델이 마지막
+#: 응답으로 진행 상황을 보고한 뒤에 붙는다.
+BUDGET_NOTICE = (
+    "\n\n[안내: 이 턴의 토큰 예산({used:,} 토큰)에 도달해 여기서 마무리했습니다. "
+    "이어서 진행하려면 '계속'이라고 보내 주세요.]"
+)
+
+#: 반복 거부 종료(stages/s16_loop/repeat_stop.py)로 끝난 턴의 안내.
+REPEAT_NOTICE = (
+    "\n\n[안내: 같은 작업이 반복되어 진전이 없어 여기서 마무리했습니다. "
+    "방향을 바꿔 다시 요청하거나 '계속'이라고 보내 주세요.]"
+)
+
+
+def _stop_notice(state: Any) -> str:
+    """턴 예산·반복 거부로 끝난 턴이면 붙일 안내, 아니면 빈 문자열."""
+    from xgen_rsi.base.stages.s16_loop.repeat_stop import repeat_stopped
+
+    if (stopped := budget_stopped(state)) is not None:
+        return BUDGET_NOTICE.format(used=int(stopped.get("used") or 0))
+    if repeat_stopped(state) is not None:
+        return REPEAT_NOTICE
+    return ""
+
+
+def stream_turn(
+    pipeline: Pipeline,
+    text: Any,
+    state: PipelineState,
+    *,
+    tool_events: bool = True,
+    result_sink: Optional[Dict[str, str]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    output_schema: Optional[Dict[str, Any]] = None,
+    on_close: Optional[Callable[[], None]] = None,
+    host: Optional[Any] = None,
+    rollout_path: Optional[str | os.PathLike[str]] = None,
+    max_continuation_slices: int = DEFAULT_MAX_CONTINUATION_SLICES,
+    usage_sink: Optional[Dict[str, Any]] = None,
+    on_loop: Optional[Callable[[Any], None]] = None,
+) -> Iterator[Union[str, Dict[str, Any]]]:
+    """Drive ``run_stream`` from a sync generator.
+
+    Yields assistant text chunks (str) and, when ``tool_events`` is on, xgen
+    ``agent_event`` dicts for tool progress — both pipeline-dispatched tools
+    (``tool.call_*``) and CLI-internal executions announced by subprocess
+    backends (``api.cli_tool_call`` / ``api.tool_result`` with source="cli").
+    A terminal engine error surfaces as a readable ``[ERROR]`` chunk. Closing
+    the generator mid-stream (client cancel → agent_node_processor calls
+    ``.close()``) tears the pipeline down via the ``finally`` block;
+    ``cancel_check`` adds a cooperative stop between events. ``on_close``
+    runs last in teardown (e.g. per-run CLI workspace cleanup).
+
+    ``output_schema`` 는 스트리밍에서는 모델이 생성한 JSON 텍스트가 그대로
+    흐른다 — 사후 검증·정규화는 non-stream(run_turn) 경로에서만 가능하다.
+
+    **usage 청크** — 파이프라인이 끝난 뒤(성공·오류·협조적 취소 무관) 사용량이
+    기록돼 있으면 ``{"type": "usage", "data": turn_usage(...)}`` 를 **정확히
+    한 번**, 제너레이터 종료 직전에 yield 한다. 소비자(사이드카·서버
+    agent_geny)가 토큰/비용을 집계하는 단일 출처. 취소된 턴은 그때까지 끝난
+    API 호출분이며 ``data["partial"] = True`` 가 붙는다(예전엔 아예 내지 않아
+    폭주 후 중지한 턴일수록 사용량이 사라졌다).
+
+    ``usage_sink`` — 선택. 소비자가 제너레이터를 ``.close()`` 로 닫으면 usage
+    청크를 yield 할 수 없다. dict 를 넘기면 종료 시(닫힘 포함) 같은 페이로드를
+    채워 둔다. 이미 usage 청크로 받은 턴에도 같은 값이 채워지므로 중복 집계하지
+    않도록 소비자가 둘 중 하나만 쓴다.
+
+    ``host`` — 선택. ``host.record_failed_starts`` (기본 True) 가 False 이면
+    "출력 0 + 실패/취소" 턴의 메모리 실행 기록을 건너뛴다
+    (:func:`_should_record_execution`).
+
+    ``rollout_path`` — host가 명시한 경우에만 기존 ``session_runtime`` 슬롯에
+    durable recorder를 겹쳐 붙인다. 생성·기록·종료는 이 private event loop에서
+    모두 끝나며, public Pipeline 입력/출력 타입은 바뀌지 않는다.
+    """
+    loop = asyncio.new_event_loop()
+    # 턴 루프를 알린다 — CLI 백엔드의 도구 표면(host.tool_surface)이 브릿지 호출을 이 루프에서 돌린다.
+    _notify_loop(on_loop, loop)
+    agen: Any = None
+    rollout_recorder: Any = None
+    original_runtime: Any = state.session_runtime
+    cli_tool_names: Dict[str, str] = {}  # tool_use_id → name (CLI 내부 실행 짝맞춤)
+    # tool_use_id → 시작 시각(monotonic). CLI 백엔드는 걸린 시간을 주지 않으므로
+    # 여기서 잰다. 이름이 아니라 id 별이라 동시 호출에서도 섞이지 않는다.
+    cli_tool_started: Dict[str, float] = {}
+    last_message_chunk = ""
+    turn_started = time.monotonic()
+    out_parts: List[str] = []
+    turn_error = ""
+    turn_completed = False
+    task_status = RunStatus.RUNNING.value
+    try:
+        if rollout_path is not None:
+            rollout_recorder, original_runtime = loop.run_until_complete(
+                _attach_rollout_recorder(pipeline, state, rollout_path)
+            )
+        next_input: Any = text
+        continuation_count = 0
+        cancelled = False
+        max_continuations = max(0, int(max_continuation_slices))
+        while True:
+            slice_streamed_text = False
+            slice_resumable = False
+            slice_reason = ""
+            agen = pipeline.run_stream(next_input, state)
+            while True:
+                if cancel_check is not None and cancel_check():
+                    logger.info("geny_bridge: cancellation requested — stopping stream")
+                    cancelled = True
+                    break
+                try:
+                    event = _next_event(loop, agen, cancel_check)
+                except _CancelRequested:
+                    logger.info("geny_bridge: cancellation requested mid-wait — stopping stream")
+                    cancelled = True
+                    break
+                except StopAsyncIteration:
+                    break
+                if event.type == "text.delta":
+                    chunk = event.data.get("text", "")
+                    if chunk:
+                        # CLI backends stream completed assistant messages,
+                        # not tokens. Keep raw pipeline events for audit, but
+                        # coalesce exact repeated progress messages at the
+                        # user-facing bridge.
+                        if event.data.get("granularity") == "message":
+                            normalized = str(chunk).strip()
+                            if normalized and normalized == last_message_chunk:
+                                # Count it as a streamed event so the
+                                # pipeline.complete fallback does not put the
+                                # same message back after coalescing it here.
+                                slice_streamed_text = True
+                                continue
+                            last_message_chunk = normalized
+                        slice_streamed_text = True
+                        out_parts.append(chunk)
+                        yield chunk
+                elif event.type == "pipeline.complete":
+                    task_status = str(event.data.get("status") or RunStatus.COMPLETED.value)
+                    slice_resumable = bool(event.data.get("resumable"))
+                    slice_reason = str(event.data.get("termination_reason") or "")
+                    # Degraded-streaming fallback is per slice: an earlier
+                    # slice may have streamed while this one did not.
+                    result = event.data.get("result", "")
+                    if not slice_streamed_text and result:
+                        out_parts.append(result)
+                        yield result
+                elif event.type == "pipeline.error":
+                    task_status = RunStatus.FAILED.value
+                    turn_error = str(event.data.get("error", "unknown error"))
+                    yield f"\n[ERROR] {turn_error}"
+                elif tool_events and event.type == "tool.call_start":
+                    yield {
+                        "type": "agent_event",
+                        "data": _tool_call_event(
+                            event.data.get("name", ""),
+                            event.data.get("input"),
+                            tool_use_id=event.data.get("tool_use_id"),
+                        ),
+                    }
+                elif tool_events and event.type == "tool.call_complete":
+                    name = event.data.get("name", "")
+                    yield {
+                        "type": "agent_event",
+                        "data": _tool_end_event(
+                            name,
+                            # 결과는 **사건이 직접 싣고 온 것**을 먼저 쓴다.
+                            # result_sink 는 호스트가 감싼 LangChain 도구만
+                            # 채우므로, 그것만 믿으면 런타임 자체 도구·제작
+                            # 도구·MCP 도구의 결과가 전부 빈 칸이 된다.
+                            str(event.data.get("error") or "")
+                            or str(event.data.get("result") or "")
+                            or (result_sink or {}).get(name, ""),
+                            is_error=bool(event.data.get("is_error")),
+                            duration_ms=event.data.get("duration_ms"),
+                            tool_use_id=event.data.get("tool_use_id"),
+                        ),
+                    }
+                elif event.type == "canvas_command":
+                    yield {"type": "canvas_command", "data": event.data}
+                elif tool_events and event.type == "api.cli_tool_call":
+                    name = event.data.get("name", "") or "cli_tool"
+                    tool_use_id = event.data.get("id") or ""
+                    if tool_use_id:
+                        cli_tool_names[tool_use_id] = name
+                        cli_tool_started[tool_use_id] = time.monotonic()
+                    yield {
+                        "type": "agent_event",
+                        "data": _tool_call_event(
+                            name, event.data.get("input"), tool_use_id=tool_use_id
+                        ),
+                    }
+                elif (
+                    tool_events
+                    and event.type == "api.tool_result"
+                    and event.data.get("source") == "cli"
+                ):
+                    tool_use_id = event.data.get("tool_use_id") or ""
+                    name = cli_tool_names.pop(tool_use_id, "") or "cli_tool"
+                    started_at = cli_tool_started.pop(tool_use_id, None)
+                    yield {
+                        "type": "agent_event",
+                        "data": _tool_end_event(
+                            name,
+                            _stringify_content(event.data.get("content")),
+                            is_error=bool(event.data.get("is_error")),
+                            duration_ms=(
+                                int((time.monotonic() - started_at) * 1000)
+                                if started_at is not None
+                                else None
+                            ),
+                            tool_use_id=tool_use_id,
+                        ),
+                    }
+            if cancelled:
+                break
+            agen = None
+            if slice_resumable and continuation_count < max_continuations:
+                continuation_count += 1
+                yield {
+                    "type": "agent_event",
+                    "data": {
+                        "type": "task_progress",
+                        "status": "continuing",
+                        "reason": slice_reason,
+                        "slice": continuation_count,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                }
+                next_input = CONTINUE_RUN
+                continue
+            if slice_resumable:
+                if output_schema is None:
+                    out_parts.append(SUSPEND_NOTICE)
+                    yield SUSPEND_NOTICE
+                yield {
+                    "type": "agent_event",
+                    "data": {
+                        "type": "task_suspended",
+                        "status": RunStatus.SUSPENDED.value,
+                        "reason": slice_reason,
+                        "resumable": True,
+                        "checkpoint_id": state.checkpoint_id,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                }
+            elif task_status == RunStatus.BLOCKED.value:
+                yield {
+                    "type": "agent_event",
+                    "data": {
+                        "type": "task_blocked",
+                        "status": RunStatus.BLOCKED.value,
+                        "reason": slice_reason,
+                        "resumable": False,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                }
+            elif output_schema is None and (notice := _stop_notice(state)):
+                # 턴 예산·반복 거부로 마무리된 턴 — 모델의 보고 뒤에 안내를 붙인다.
+                out_parts.append(notice)
+                yield notice
+            turn_completed = True
+            break
+        # 파이프라인 종료 후 정확히 1회. 협조적 취소(break)로 나온 턴도 그때까지
+        # 끝난 API 호출분을 낸다 — 백그라운드 태스크가 남아 있을 수 있어 partial 표시.
+        usage = turn_usage(pipeline, state)
+        if usage is not None:
+            if not turn_completed:
+                usage = {**usage, "partial": True}
+            if usage_sink is not None:
+                usage_sink.update(usage)
+            yield {"type": "usage", "data": usage}
+    finally:
+        # 소비자가 .close() 로 닫아 usage 청크를 yield 하지 못한 경우에도 sink 는 채운다.
+        if usage_sink is not None and not usage_sink:
+            try:
+                _closed_usage = turn_usage(pipeline, state)
+                if _closed_usage is not None:
+                    usage_sink.update({**_closed_usage, "partial": True})
+            except Exception:  # noqa: BLE001 — 집계는 정리를 막지 않는다
+                logger.debug("geny_bridge: usage aggregation on close failed", exc_info=True)
+        if agen is not None:
+            try:
+                loop.run_until_complete(agen.aclose())
+            except Exception:  # noqa: BLE001 - teardown must not mask the run
+                pass
+        try:
+            loop.run_until_complete(pipeline.aclose())
+        except Exception:  # noqa: BLE001
+            pass
+        _notify_loop(on_loop, None)
+        if rollout_recorder is not None and rollout_path is not None:
+            _close_rollout_recorder(rollout_recorder, rollout_path, loop)
+            state.session_runtime = original_runtime
+        turn_failed = (
+            bool(turn_error) or not turn_completed or task_status != RunStatus.COMPLETED.value
+        )
+        if not turn_completed or turn_error:
+            # 끝나지 못한 턴도 대화 기억에 남긴다 — 다음 턴이 무엇을 하다 멈췄는지 안다.
+            _record_unfinished_turn(
+                pipeline,
+                loop,
+                state=state,
+                input_text=text,
+                reason="error" if turn_error else "cancelled",
+            )
+        if _should_record_execution(host, produced_output=bool(out_parts), failed=turn_failed):
+            _record_execution(
+                pipeline,
+                loop,
+                input_text=text,
+                state=state,
+                output_text="".join(out_parts),
+                success=not turn_failed,
+                duration_ms=int((time.monotonic() - turn_started) * 1000),
+                error=(
+                    turn_error
+                    or ("cancelled" if not turn_completed else "")
+                    or (task_status if task_status != RunStatus.COMPLETED.value else "")
+                ),
+                cancelled=not turn_completed and not turn_error,
+            )
+        else:
+            logger.debug(
+                "geny_bridge: execution record skipped — failed before any output "
+                "(host.record_failed_starts=False)"
+            )
+        _close_memory_provider(pipeline, loop)
+        loop.close()
+        if on_close is not None:
+            try:
+                on_close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def run_turn(
+    pipeline: Pipeline,
+    text: Any,
+    state: PipelineState,
+    *,
+    output_schema: Optional[Dict[str, Any]] = None,
+    host: Optional[Any] = None,
+    usage_sink: Optional[Dict[str, Any]] = None,
+    rollout_path: Optional[str | os.PathLike[str]] = None,
+    max_continuation_slices: int = DEFAULT_MAX_CONTINUATION_SLICES,
+    on_loop: Optional[Callable[[Any], None]] = None,
+) -> str:
+    """Run one turn to completion and return the final text (non-streaming).
+
+    반환값은 문자열이라 usage 를 실어 보낼 결과 객체가 없다 — 호출자가
+    ``usage_sink`` (dict) 를 넘기면 실행 후 :func:`turn_usage` 페이로드
+    (stream_turn 의 ``usage`` 청크 ``data`` 와 동일 shape)로 채워 준다.
+    ``host`` 는 stream_turn 과 같은 record_failed_starts 게이트.
+    ``rollout_path`` 는 stream_turn 과 같은 opt-in host-owned 기록 경로다.
+    """
+    loop = asyncio.new_event_loop()
+    _notify_loop(on_loop, loop)
+    rollout_recorder: Any = None
+    original_runtime: Any = state.session_runtime
+    turn_started = time.monotonic()
+    turn_output = ""
+    turn_success = False
+    turn_error = ""
+    produced_output = False
+    try:
+        if rollout_path is not None:
+            rollout_recorder, original_runtime = loop.run_until_complete(
+                _attach_rollout_recorder(pipeline, state, rollout_path)
+            )
+        result = loop.run_until_complete(pipeline.run(text, state))
+        continuation_count = 0
+        max_continuations = max(0, int(max_continuation_slices))
+        while bool(getattr(result, "resumable", False)) and continuation_count < max_continuations:
+            continuation_count += 1
+            result = loop.run_until_complete(pipeline.run(CONTINUE_RUN, state))
+        produced_output = bool(getattr(result, "text", "") or "")
+        if usage_sink is not None:
+            try:
+                usage = turn_usage(pipeline, state)
+                if usage is not None:
+                    usage_sink.update(usage)
+            except Exception:  # noqa: BLE001 — 집계는 턴 결과를 바꾸지 않는다
+                logger.debug("geny_bridge: usage aggregation failed", exc_info=True)
+        if not result.success:
+            status = str(getattr(result, "status", RunStatus.FAILED.value))
+            if status == RunStatus.SUSPENDED.value:
+                reason = str(getattr(result, "termination_reason", "") or "slice_limit")
+                turn_error = f"suspended: {reason}"
+                return f"[SUSPENDED] {reason}"
+            if status == RunStatus.BLOCKED.value:
+                reason = str(getattr(result, "termination_reason", "") or "blocked")
+                turn_error = f"blocked: {reason}"
+                return f"[BLOCKED] {reason}"
+            turn_error = str(result.error or "unknown error")
+            return f"[ERROR] {result.error}"
+        final = result.text or ""
+        if output_schema:
+            final = settle_structured(final, output_schema)
+        else:
+            final += _stop_notice(state)
+        turn_output = final
+        turn_success = True
+        return final
+    except BaseException as exc:
+        turn_error = f"{type(exc).__name__}: {exc}"[:300]
+        raise
+    finally:
+        try:
+            loop.run_until_complete(pipeline.aclose())
+        except Exception:  # noqa: BLE001
+            pass
+        _notify_loop(on_loop, None)
+        if rollout_recorder is not None and rollout_path is not None:
+            _close_rollout_recorder(rollout_recorder, rollout_path, loop)
+            state.session_runtime = original_runtime
+        if not turn_success:
+            # 끝나지 못한 턴도 대화 기억에 남긴다(stream_turn 과 같다). 예외로 끊긴 턴은 취소로 본다.
+            _record_unfinished_turn(
+                pipeline,
+                loop,
+                state=state,
+                input_text=text,
+                reason="cancelled" if "Cancel" in turn_error else "error",
+            )
+        if _should_record_execution(
+            host, produced_output=produced_output or bool(turn_output), failed=not turn_success
+        ):
+            _record_execution(
+                pipeline,
+                loop,
+                input_text=text,
+                state=state,
+                output_text=turn_output,
+                success=turn_success,
+                duration_ms=int((time.monotonic() - turn_started) * 1000),
+                error=turn_error,
+            )
+        else:
+            logger.debug(
+                "geny_bridge: execution record skipped — failed before any output "
+                "(host.record_failed_starts=False)"
+            )
+        _close_memory_provider(pipeline, loop)
+        loop.close()

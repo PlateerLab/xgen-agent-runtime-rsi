@@ -6,7 +6,7 @@
 
 ## 1. 라이브러리 API — `GenyRSI`
 
-`xgen-agent-runtime`의 `PipelinePresets`와 같은 모양이다. 턴 하나는 운영과 **같은 경로**로 돈다. 즉 `AgentTurnExecutor().run(host, **kwargs)`로 턴을 조립한 뒤 실행 코어를 고른다. 호스트는 `LocalHost`이고, 작업 공간·내장 도구·자격증명을 이 프로세스 안에서 제공한다.
+`xgen-agent-runtime`의 `PipelinePresets`와 같은 모양이다. 턴 하나는 운영과 **같은 경로**로 돈다. 즉 `GenyRSITurnExecutor().run(host, **kwargs)`로 턴을 조립한 뒤 이 패키지의 실행 코어로 돈다. 호스트는 `LocalHost`이고, 작업 공간·내장 도구·자격증명을 이 프로세스 안에서 제공한다. 이 패키지는 xgen-agent-runtime 을 import 하지 않는다. 바탕 런타임은 4.80.0 사본 `xgen_rsi.base` 다.
 
 ```python
 from xgen_rsi import GenyRSI
@@ -29,7 +29,7 @@ print(worker.last_result.usage)
 
 # 진화된 하네스로 돌리기 / 같은 호출로 기존 엔진(A/B)
 evolved = GenyRSI.agent(..., harness="./H_star")       # rsi evolve export 로 꺼낸 디렉터리
-baseline = GenyRSI.agent(..., engine="geny")           # 기존 21-stage 엔진
+baseline = GenyRSI.agent(..., engine="geny")           # 21-stage 엔진(geny, xgen_rsi.base 사본)
 ```
 
 | 인자 | 뜻 |
@@ -48,9 +48,10 @@ baseline = GenyRSI.agent(..., engine="geny")           # 기존 21-stage 엔진
 
 ## 2. 호스트(XGEN 서버 등)에서 — 진입점 하나
 
-기존 런타임(xgen-agent-runtime)은 geny-rsi 를 모르고, 이 패키지 때문에 고쳐지지도 않는다. 호스트가 턴을 실행하는 자리에서
-클래스만 바꾼다. 두 진입점은 같은 계약이다 — `run(host, **kwargs)`, `streaming=True` 면 글 조각·사건 dict 이터레이터,
-`False` 면 최종 글, 조립 실패는 `"[ERROR] geny agent could not start: …"` 출력.
+xgen-agent-runtime 과 이 패키지는 서로 의존하지 않는다. 호스트가 둘을 각각 import 하고, 턴을 실행하는 자리에서 클래스를 고른다.
+두 진입점은 같은 계약이다 — `run(host, **kwargs)`, `streaming=True` 면 글 조각·사건 dict 이터레이터, `False` 면 최종 글, 조립 실패는
+`"[ERROR] geny agent could not start: …"` 출력. 호스트가 턴에 넘기는 도구·기억 객체는 그 에이전트의 패키지(이 패키지는
+`xgen_rsi.base`)로 만든다 — `Tool`·`ToolRegistry`·기억 공급자 클래스는 두 패키지에서 서로 다른 클래스다.
 
 ```python
 from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor   # geny (기존 21-stage)
@@ -73,7 +74,7 @@ geny-rsi 가 읽는 호스트 설정(`host.setting`):
 | `XGEN_RSI_RECORD_DIR` | 궤적 기록 위치(없으면 기록 안 함) |
 | `XGEN_RSI_RECORD_CONTENT` | 기록에 전사·최종 글 포함(평가용 — 운영 기본 끔, 개인정보) |
 
-되돌리기: 호스트가 `AgentTurnExecutor` 로 돌아가면 된다(기존 런타임은 처음부터 그대로다). 진화 중단은 `STOP` 파일.
+되돌리기: 호스트가 xgen-agent-runtime 의 `AgentTurnExecutor` 로 돌아가면 된다(두 패키지는 서로 영향을 주지 않는다). 진화 중단은 `STOP` 파일.
 
 ---
 

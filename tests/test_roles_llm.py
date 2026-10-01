@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures as cf
 
-from xgen_agent_runtime.core.state import TokenUsage
-from xgen_agent_runtime.host import runner as runner_mod
-from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
-
+from xgen_rsi.base.core.state import TokenUsage
+from xgen_rsi.base.host import runner as runner_mod
+from xgen_rsi.base.llm_client.types import APIResponse, ContentBlock
 from xgen_rsi.roles.llm import RoleLLM, RoleModel
 
 

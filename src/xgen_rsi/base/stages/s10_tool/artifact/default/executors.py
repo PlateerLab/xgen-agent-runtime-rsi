@@ -1,0 +1,434 @@
+"""Default artifact executors for Stage 10: Tool."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any, Dict, List, Optional
+
+from xgen_rsi.base.core.schema import ConfigField, ConfigSchema
+from xgen_rsi.base.tools.base import ToolCapabilities, ToolContext
+from xgen_rsi.base.tools.registry import ToolRegistry
+from xgen_rsi.base.stages.s10_tool.interface import (
+    ToolEventCallback,
+    ToolExecutor,
+    ToolRouter,
+)
+from xgen_rsi.base.stages.s10_tool.persistence import maybe_persist_large_result
+
+
+def _apply_state_mutations_via_ctx(result, tc: Dict[str, Any], context: ToolContext) -> None:
+    """Push ``result.state_mutations`` through the context's state sink.
+
+    Skips on ``is_error=True`` results — a failing tool must not leave
+    its half-written state behind. When ``context.state_apply`` is None
+    (e.g. a test harness using an executor without ToolStage), mutations
+    are silently discarded — the sink is optional.
+    """
+    if getattr(result, "is_error", False):
+        return
+    if not getattr(result, "state_mutations", None):
+        return
+    if context.state_apply is None:
+        return
+    try:
+        context.state_apply(result.state_mutations, tc.get("tool_name", "?"))
+    except Exception:  # pragma: no cover - defensive
+        # A broken state sink must not take down the tool call.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "state_apply for tool %s raised; skipping mutation",
+            tc.get("tool_name", "?"),
+            exc_info=True,
+        )
+
+
+def _resolve_capabilities(registry: Optional[ToolRegistry], tc: Dict[str, Any]) -> ToolCapabilities:
+    """Look up ``capabilities`` for this call; fail-closed on any error.
+
+    The default ``ToolCapabilities()`` has ``max_result_chars=100_000`` — a
+    conservative cap that engages the persistence path for genuinely
+    oversized payloads without touching small results. Executors that don't
+    have a registry handle (e.g. Sequential/Parallel in legacy callers) can
+    still benefit from the default cap.
+    """
+    if registry is None:
+        return ToolCapabilities()
+    tool = registry.get(tc.get("tool_name", ""))
+    if tool is None:
+        return ToolCapabilities()
+    try:
+        return tool.capabilities(tc.get("tool_input", {}))
+    except Exception:
+        return ToolCapabilities()
+
+
+def _router_registry(router: ToolRouter) -> Optional[ToolRegistry]:
+    """Fish the registry out of a router when one isn't explicitly held."""
+    reg = getattr(router, "_registry", None)
+    return reg if isinstance(reg, ToolRegistry) else None
+
+
+def _emit_call_start(on_event: Optional[ToolEventCallback], tc: Dict[str, Any]) -> None:
+    if on_event is None:
+        return
+    on_event(
+        "tool.call_start",
+        {
+            "tool_use_id": tc.get("tool_use_id", ""),
+            "name": tc.get("tool_name", ""),
+            "input": tc.get("tool_input", {}),
+        },
+    )
+
+
+#: 실패 사유를 사건에 실을 때의 상한. 사람이 읽을 첫 화면 분량이면 충분하다.
+_ERROR_TEXT_CAP = 2000
+
+#: 성공 결과는 실패 사유보다 넉넉히 — 로그를 보는 사람이 "무엇이 나왔나" 를
+#: 판단할 수 있어야 한다. 호스트가 표시 직전에 한 번 더 줄인다.
+_RESULT_TEXT_CAP = 8000
+
+
+def _error_text(result_dict: Dict[str, Any]) -> str:
+    """실패한 도구가 남긴 말. 없으면 빈 문자열."""
+    for key in ("content", "display_text", "error"):
+        value = result_dict.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:_ERROR_TEXT_CAP]
+        if value not in (None, "", [], {}):
+            return str(value)[:_ERROR_TEXT_CAP]
+    return ""
+
+
+def _result_text(result_dict: Dict[str, Any]) -> str:
+    """성공한 도구가 낸 결과. 없으면 빈 문자열.
+
+    실패 사유와 **같은 자리**에서 꺼낸다 — 성공/실패로 모양이 갈리면 한쪽이
+    반드시 빠진다.
+    """
+    for key in ("content", "display_text", "result", "output"):
+        value = result_dict.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:_RESULT_TEXT_CAP]
+        if value not in (None, "", [], {}):
+            return str(value)[:_RESULT_TEXT_CAP]
+    return ""
+
+
+def _emit_call_complete(
+    on_event: Optional[ToolEventCallback],
+    tc: Dict[str, Any],
+    result_dict: Dict[str, Any],
+    duration_ms: int,
+) -> None:
+    if on_event is None:
+        return
+    is_error = bool(result_dict.get("is_error"))
+    data: Dict[str, Any] = {
+        "tool_use_id": tc.get("tool_use_id", ""),
+        "name": tc.get("tool_name", ""),
+        "is_error": is_error,
+        "duration_ms": duration_ms,
+    }
+    if is_error:
+        # **사유를 함께 싣는다.** 성공 결과는 크고 모델이 이미 받지만, 실패
+        # 사유는 작고 **아무 데도 남지 않았다**: 호스트는 이 사건에 내용이 없어
+        # "tool execution failed" 라는 고정 문구로 UI·트레이스에 적었고, 그래서
+        # [전체로그]에는 같은 줄만 여덟 번 쌓였다. 무엇을 고쳐야 하는지 아무도
+        # 알 수 없었다 (프로드 실증).
+        data["error"] = _error_text(result_dict)
+    else:
+        # **결과도 함께 싣는다.**
+        #
+        # 예전 판단은 "성공 결과는 크고 모델이 이미 받는다" 였다. 모델에게는
+        # 맞는 말이지만 **로그에게는 아니다.** 호스트는 이 사건에 결과가 없으니
+        # result_sink 로 떨어지는데, 그 sink 는 호스트가 감싼 LangChain 도구만
+        # 채운다 — 런타임 자체 도구·에이전트가 만든 도구·MCP 로 노출한 도구는
+        # 전부 빈 문자열이 됐다. [전체로그]에서 도구 줄을 펼치면 "결과" 칸이
+        # 아예 없었다(프로드 실증: Bash·Write·제작 도구 전부).
+        #
+        # 크기는 여기서 자른다 — 이벤트는 여러 소비자를 지나므로 잘라 보내는
+        # 편이 낫고, 호스트도 표시 직전에 한 번 더 줄인다.
+        data["result"] = _result_text(result_dict)
+    on_event("tool.call_complete", data)
+
+
+class SequentialExecutor(ToolExecutor):
+    """Executes tools one by one in order."""
+
+    @property
+    def name(self) -> str:
+        return "sequential"
+
+    @property
+    def description(self) -> str:
+        return "Execute tools sequentially"
+
+    async def execute_all(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        router: ToolRouter,
+        context: ToolContext,
+        *,
+        on_event: Optional[ToolEventCallback] = None,
+    ) -> List[Dict[str, Any]]:
+        registry = _router_registry(router)
+        results = []
+        for tc in tool_calls:
+            _emit_call_start(on_event, tc)
+            t0 = time.monotonic()
+            result = await router.route(
+                tc["tool_name"],
+                tc.get("tool_input", {}),
+                context,
+            )
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            caps = _resolve_capabilities(registry, tc)
+            result = maybe_persist_large_result(
+                result,
+                tool_use_id=tc["tool_use_id"],
+                tool_name=tc["tool_name"],
+                capabilities=caps,
+                context=context,
+            )
+            _apply_state_mutations_via_ctx(result, tc, context)
+            result_dict = result.to_api_format(tc["tool_use_id"])
+            _emit_call_complete(on_event, tc, result_dict, duration_ms)
+            results.append(result_dict)
+        return results
+
+
+def _max_concurrency_schema(name: str, default: int) -> ConfigSchema:
+    """Shared schema for the executors' single tunable.
+
+    The attribute stays named ``_max_concurrency`` on purpose: the default
+    ToolStage still pokes it directly (``_apply_max_concurrency``) for
+    stage-level config; configure() is the manifest-reachable channel for
+    the same knob (audit §1-1: strategy_configs previously vanished here).
+    """
+    return ConfigSchema(
+        name=name,
+        fields=[
+            ConfigField(
+                name="max_concurrency",
+                type="integer",
+                label="Max concurrency",
+                description="Upper bound on tool calls running at the same time.",
+                default=default,
+                min_value=1,
+            ),
+        ],
+    )
+
+
+def _coerce_max_concurrency(strategy: str, value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{strategy}: 'max_concurrency' must be an integer >= 1, got {value!r}")
+    return value
+
+
+class ParallelExecutor(ToolExecutor):
+    """Executes independent tools concurrently."""
+
+    def __init__(self, max_concurrency: int = 5):
+        self._max_concurrency = max_concurrency
+
+    @property
+    def name(self) -> str:
+        return "parallel"
+
+    @property
+    def description(self) -> str:
+        return f"Execute tools in parallel (max {self._max_concurrency})"
+
+    @classmethod
+    def config_schema(cls) -> ConfigSchema:
+        return _max_concurrency_schema("parallel", 5)
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        if "max_concurrency" in config:
+            self._max_concurrency = _coerce_max_concurrency("parallel", config["max_concurrency"])
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"max_concurrency": self._max_concurrency}
+
+    async def execute_all(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        router: ToolRouter,
+        context: ToolContext,
+        *,
+        on_event: Optional[ToolEventCallback] = None,
+    ) -> List[Dict[str, Any]]:
+        semaphore = asyncio.Semaphore(self._max_concurrency)
+        registry = _router_registry(router)
+
+        async def _execute_one(tc: Dict[str, Any]) -> Dict[str, Any]:
+            async with semaphore:
+                _emit_call_start(on_event, tc)
+                t0 = time.monotonic()
+                result = await router.route(
+                    tc["tool_name"],
+                    tc.get("tool_input", {}),
+                    context,
+                )
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                caps = _resolve_capabilities(registry, tc)
+                result = maybe_persist_large_result(
+                    result,
+                    tool_use_id=tc["tool_use_id"],
+                    tool_name=tc["tool_name"],
+                    capabilities=caps,
+                    context=context,
+                )
+                _apply_state_mutations_via_ctx(result, tc, context)
+                result_dict = result.to_api_format(tc["tool_use_id"])
+                _emit_call_complete(on_event, tc, result_dict, duration_ms)
+                return result_dict
+
+        tasks = [_execute_one(tc) for tc in tool_calls]
+        return list(await asyncio.gather(*tasks))
+
+
+class PartitionExecutor(ToolExecutor):
+    """Partition tool calls by ``ToolCapabilities.concurrency_safe``.
+
+    Cycle 20260424 executor uplift — Phase 1 Week 3 Checkpoint 4.
+
+    For each pending tool call, consults the tool's
+    ``capabilities(input)`` to decide:
+    - ``concurrency_safe=True`` → run in parallel batch (bounded by
+      ``max_concurrency``)
+    - ``concurrency_safe=False`` → run serially, after the parallel
+      batch completes
+
+    Result order matches the ``tool_calls`` input order — downstream
+    stages (Tool Review, Agent, Loop) receive results in a deterministic
+    sequence regardless of completion timing.
+
+    When a tool is not found in the registry (shouldn't happen if
+    routing is consistent with registration) it's treated as unsafe
+    (fail-closed).
+
+    This is the foundation for full partition + streaming orchestration
+    (Phase 2 Week 4 — StreamingToolExecutor extension).
+    """
+
+    def __init__(
+        self,
+        registry: Optional[ToolRegistry] = None,
+        *,
+        max_concurrency: int = 10,
+    ):
+        self._registry = registry
+        self._max_concurrency = max_concurrency
+
+    @property
+    def name(self) -> str:
+        return "partition"
+
+    @property
+    def description(self) -> str:
+        return (
+            f"Partition tool calls by concurrency_safe capability "
+            f"(max parallel: {self._max_concurrency})"
+        )
+
+    @classmethod
+    def config_schema(cls) -> ConfigSchema:
+        return _max_concurrency_schema("partition", 10)
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        if "max_concurrency" in config:
+            self._max_concurrency = _coerce_max_concurrency("partition", config["max_concurrency"])
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"max_concurrency": self._max_concurrency}
+
+    def bind_registry(self, registry: ToolRegistry) -> None:
+        """Late-bind the tool registry — mirrors RegistryRouter pattern."""
+        self._registry = registry
+
+    def _lookup_capabilities(self, tc: Dict[str, Any]) -> ToolCapabilities:
+        """Peek at a tool's capabilities for this invocation.
+
+        Falls back to ``ToolCapabilities()`` (fail-closed: unsafe) when
+        no registry is bound or the tool is unknown.
+        """
+        if self._registry is None:
+            return ToolCapabilities()
+        tool = self._registry.get(tc.get("tool_name", ""))
+        if tool is None:
+            return ToolCapabilities()
+        try:
+            return tool.capabilities(tc.get("tool_input", {}))
+        except Exception:
+            # Capability inspection must never crash orchestration.
+            return ToolCapabilities()
+
+    async def execute_all(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        router: ToolRouter,
+        context: ToolContext,
+        *,
+        on_event: Optional[ToolEventCallback] = None,
+    ) -> List[Dict[str, Any]]:
+        # Late-bind registry from the router when needed (mirrors how
+        # the default ToolStage calls bind_registry on the router).
+        if self._registry is None:
+            router_registry = getattr(router, "_registry", None)
+            if isinstance(router_registry, ToolRegistry):
+                self._registry = router_registry
+
+        # Partition while preserving original positions so we can
+        # reconstruct order in the final result list.
+        safe_indexed: List[tuple[int, Dict[str, Any]]] = []
+        unsafe_indexed: List[tuple[int, Dict[str, Any]]] = []
+        for i, tc in enumerate(tool_calls):
+            caps = self._lookup_capabilities(tc)
+            (safe_indexed if caps.concurrency_safe else unsafe_indexed).append((i, tc))
+
+        results: List[Optional[Dict[str, Any]]] = [None] * len(tool_calls)
+        semaphore = asyncio.Semaphore(self._max_concurrency)
+
+        async def _run_one(tc: Dict[str, Any]) -> Dict[str, Any]:
+            _emit_call_start(on_event, tc)
+            t0 = time.monotonic()
+            result = await router.route(
+                tc["tool_name"],
+                tc.get("tool_input", {}),
+                context,
+            )
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            caps = self._lookup_capabilities(tc)
+            result = maybe_persist_large_result(
+                result,
+                tool_use_id=tc["tool_use_id"],
+                tool_name=tc["tool_name"],
+                capabilities=caps,
+                context=context,
+            )
+            _apply_state_mutations_via_ctx(result, tc, context)
+            result_dict = result.to_api_format(tc["tool_use_id"])
+            _emit_call_complete(on_event, tc, result_dict, duration_ms)
+            return result_dict
+
+        async def _run_bounded(tc: Dict[str, Any]) -> Dict[str, Any]:
+            async with semaphore:
+                return await _run_one(tc)
+
+        # 1) Parallel batch — concurrency_safe tools
+        if safe_indexed:
+            parallel_results = await asyncio.gather(*(_run_bounded(tc) for _, tc in safe_indexed))
+            for (pos, _), res in zip(safe_indexed, parallel_results):
+                results[pos] = res
+
+        # 2) Sequential batch — everything else (strict order)
+        for pos, tc in unsafe_indexed:
+            results[pos] = await _run_one(tc)
+
+        # All positions filled (we iterated every input); narrow the type
+        return [r for r in results if r is not None]

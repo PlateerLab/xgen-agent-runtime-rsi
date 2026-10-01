@@ -30,7 +30,7 @@ class PromptCacheComponent(Component):
         if not bool(rt.plan.pipeline_kwargs.get("enable_prompt_cache", False)):
             return
         if self._strategy is None:
-            from xgen_agent_runtime.stages.s05_cache.artifact.default.strategies import (
+            from xgen_rsi.base.stages.s05_cache.artifact.default.strategies import (
                 AggressiveCacheStrategy,
                 SystemCacheStrategy,
             )

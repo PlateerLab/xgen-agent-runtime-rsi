@@ -36,6 +36,7 @@ Four questions:
 
 **Common conditions**
 - Runtime: both engines on the xgen-agent-runtime **4.78.0** wheel, with the same provider layer (clients, retries, Responses API).
+  (These runs used geny-rsi 0.1.0–0.2.0, when it used the runtime as a library. From 0.3.0 geny-rsi does not depend on the runtime and uses `xgen_rsi.base`, a copy of 4.80.0.)
 - Host: `EvalHost` (LocalHost). Each trial gets an isolated workspace, and the five built-in file tools (Read·Write·Edit·Glob·Grep) are confined to it.
   Seed-file modification times are fixed in path order, so Glob's result order is deterministic (see §4).
 - Policy settings: model defaults (temperature 0.7 requested; reasoning models follow the provider's rules), memory and self-evolution off, per-task iteration caps (xgen-core default, xgen-hard 30).

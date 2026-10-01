@@ -10,7 +10,7 @@
 5. 반복 거부 종료, 턴 입력 예산(쌓이면 보고를 받고 끝낸다).
 
 슬라이스 반복 한도(``max_iterations``)는 커널 한도다 — 여기서 늘릴 수 없다. 장치(검토자·반복 종료·
-턴 예산)는 기존 런타임 구현을 쓰고, 켜기·끄기와 임계값이 파라미터다.
+턴 예산)는 바탕 런타임(``xgen_rsi.base``) 구현을 쓰고, 켜기·끄기와 임계값이 파라미터다.
 """
 
 from __future__ import annotations
@@ -50,17 +50,17 @@ class StandardControlComponent(Component):
         kw = rt.plan.pipeline_kwargs
         self._reviewers = []
         if self.param("completion_review", True) and rt.plan.run_tool_context is not None and not rt.is_cli:
-            from xgen_agent_runtime.stages.s16_loop.completion_review import DeliverableReviewer
+            from xgen_rsi.base.stages.s16_loop.completion_review import DeliverableReviewer
 
             self._reviewers.append(DeliverableReviewer(rt.tool_context_provider))
         repeat_after = kw.get("repeat_stop_after", self.param("repeat_stop_after", 3))
         if repeat_after and int(repeat_after) > 0:
-            from xgen_agent_runtime.stages.s16_loop.repeat_stop import RepeatStop
+            from xgen_rsi.base.stages.s16_loop.repeat_stop import RepeatStop
 
             self._repeat_stop = RepeatStop(stop_after=int(repeat_after))
         budget = kw.get("turn_input_budget_tokens", None)
         if budget is None and "turn_input_budget_tokens" not in kw:
-            from xgen_agent_runtime.stages.s16_loop.turn_budget import (
+            from xgen_rsi.base.stages.s16_loop.turn_budget import (
                 DEFAULT_HARD_TOKENS,
                 DEFAULT_SOFT_TOKENS,
             )
@@ -71,7 +71,7 @@ class StandardControlComponent(Component):
             )
         soft, hard = budget or (0, 0)
         if int(soft) > 0 and int(hard) > 0:
-            from xgen_agent_runtime.stages.s16_loop.turn_budget import TurnInputBudget
+            from xgen_rsi.base.stages.s16_loop.turn_budget import TurnInputBudget
 
             self._turn_budget = TurnInputBudget(soft_tokens=int(soft), hard_tokens=int(hard))
 

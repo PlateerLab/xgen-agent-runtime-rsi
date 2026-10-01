@@ -1,6 +1,6 @@
 name: Release wheel
 
-# PyPI 가 아니라 GitHub Release 자산으로 wheel 을 낸다(xgen-agent-runtime 과 같은 방식).
+# PyPI 가 아니라 GitHub Release 자산으로 wheel 을 낸다.
 on:
   push:
     tags: ['v*']
@@ -27,8 +27,7 @@ jobs:
       - run: python -m build
       - name: 설치되고 import 되는지 확인
         run: |
-          pip install "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl" \
-                      "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl" dist/*.whl
+          pip install dist/*.whl
           python -c "from xgen_rsi import GenyRSI; import xgen_rsi; print(xgen_rsi.__version__)"
           rsi harness validate
       - uses: softprops/action-gh-release@v2

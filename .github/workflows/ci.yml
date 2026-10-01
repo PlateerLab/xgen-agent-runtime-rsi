@@ -14,11 +14,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  # 런타임은 PyPI 가 아니라 GitHub Release wheel 로 배포된다 — 같은 방식으로 먼저 설치한다.
-  RUNTIME_WHEEL: "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl"
-  PDF_WHEEL: "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl"
-
 jobs:
   lint:
     name: Lint
@@ -41,7 +36,6 @@ jobs:
           python-version: "3.12"
       - run: |
           pip install --upgrade pip
-          pip install "$RUNTIME_WHEEL" "$PDF_WHEEL"
           pip install -e ".[dev]"
       - run: mypy
 
@@ -59,8 +53,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: |
           pip install --upgrade pip
-          pip install "$RUNTIME_WHEEL" "$PDF_WHEEL"
           pip install -e ".[dev]"
+      - name: xgen-agent-runtime 없이 돈다(독립 패키지)
+        run: |
+          python -c "import importlib.util as u, sys; sys.exit(1 if u.find_spec('xgen_agent_runtime') else 0)"
+          ! grep -rn "xgen_agent_runtime" src/
       - run: pytest -q -p no:warnings
 
   build:
@@ -75,7 +72,7 @@ jobs:
       - run: python -m build
       - name: 설치되고 import 되는지, 하네스·스위트 데이터가 들어 있는지
         run: |
-          pip install "$RUNTIME_WHEEL" "$PDF_WHEEL" dist/*.whl
+          pip install dist/*.whl
           python -c "import xgen_rsi; from xgen_rsi import GenyRSI; print('xgen_rsi', xgen_rsi.__version__)"
           rsi harness validate
           rsi suite build /tmp/xc --suite xgen-hard

@@ -1,6 +1,6 @@
 """사용량 원장 — 정책 π 에 대한 **모든** 호출의 단일 기록처. RRSI 의 c(τ) 는 여기서만 계산한다.
 
-기존 런타임은 메인 루프 호출만 셌고(압축·증류·내부 도구 루프·재시도는 빠짐, 조사 12·13·14 문서), 그래서
+기존 엔진(geny)은 메인 루프 호출만 셌고(압축·증류·내부 도구 루프·재시도는 빠짐, 조사 12·13·14 문서), 그래서
 RRSI 비용 규칙(Eq.7)의 ΔC 를 믿을 수 없었다. 여기서는 공급자 클라이언트를 :class:`LedgerClient` 로 감싸
 턴의 모든 호출을 지나게 한다 — 커널 게이트웨이의 메인 호출이든, ``state.llm_client`` 를 쓰는 압축기든.
 
@@ -166,7 +166,7 @@ class UsageLedger:
         harness: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         """기존 ``runner.turn_usage`` 와 같은 모양·같은 의미의 usage 페이로드. 외부 호출이 0회면 None."""
-        from xgen_agent_runtime.core.state import TokenUsage
+        from xgen_rsi.base.core.state import TokenUsage
 
         calls = [u for u in self.external_usages if isinstance(u, TokenUsage)]
         if not calls:

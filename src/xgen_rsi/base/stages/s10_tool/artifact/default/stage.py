@@ -1,0 +1,442 @@
+"""Default implementation of Stage 10: Tool."""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from xgen_rsi.base.core.schema import ConfigField, ConfigSchema
+from xgen_rsi.base.core.slot import StrategySlot
+from xgen_rsi.base.core.stage import Stage
+from xgen_rsi.base.core.state import PipelineState
+from xgen_rsi.base.tools.base import ToolContext
+from xgen_rsi.base.tools.registry import ToolRegistry
+from xgen_rsi.base.tools.stage_binding import ToolAccessDenied
+from xgen_rsi.base.stages.s10_tool.interface import ToolExecutor, ToolRouter
+from xgen_rsi.base.stages.s10_tool.artifact.default.executors import (
+    ParallelExecutor,
+    PartitionExecutor,
+    SequentialExecutor,
+)
+from xgen_rsi.base.stages.s10_tool.artifact.default.routers import RegistryRouter
+from xgen_rsi.base.stages.s10_tool.streaming import StreamingToolExecutor
+from xgen_rsi.base.stages.s10_tool import repeat_guard, second_machine
+
+
+# Default parallel budget when a host doesn't specify one. Matches the
+# ParallelExecutor default and the PartitionExecutor / StreamingToolExecutor
+# defaults — keep these in sync when changing.
+_DEFAULT_MAX_CONCURRENCY = 10
+
+
+class ToolStage(Stage[Any, Any]):
+    """Stage 10: Tool.
+
+    Dual abstraction:
+      - Level 2 executor: execution pattern (sequential/parallel/partition)
+      - Level 2 router: dispatches tool calls to implementations
+
+    Cycle 20260424 (Phase 2 Week 4 Checkpoint 4): exposes
+    ``max_concurrency`` through the stage ConfigSchema so hosts can tune
+    the parallel budget without swapping executors. Applied to the
+    currently-active executor each time ``update_config`` runs.
+    """
+
+    def __init__(
+        self,
+        registry: Optional[ToolRegistry] = None,
+        executor: Optional[ToolExecutor] = None,
+        router: Optional[ToolRouter] = None,
+        context: Optional[ToolContext] = None,
+        *,
+        max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
+    ):
+        self._registry = registry or ToolRegistry()
+        self._max_concurrency = max(1, int(max_concurrency))
+        default_executor = executor or SequentialExecutor()
+        # Propagate onto the already-constructed executor if one was
+        # passed in — callers may build a ParallelExecutor(5) directly
+        # but still want the stage's knob to govern later updates.
+        self._apply_max_concurrency(default_executor)
+        self._slots: Dict[str, StrategySlot] = {
+            "executor": StrategySlot(
+                name="executor",
+                strategy=default_executor,
+                registry={
+                    "sequential": SequentialExecutor,
+                    "parallel": ParallelExecutor,
+                    # Phase 1 W3 Checkpoint 4 — capability-aware partition
+                    # executor. Opt-in: set via `mutator.swap_strategy(
+                    # stage_order=10, slot_name="executor",
+                    # impl_name="partition")`.
+                    "partition": PartitionExecutor,
+                    # 2.2.0 review N4: exported + named in this stage's
+                    # ConfigSchema since Phase 2 W4, but never electable
+                    # from a manifest because it was missing here.
+                    "streaming": StreamingToolExecutor,
+                },
+                description="Tool execution strategy",
+            ),
+            "router": StrategySlot(
+                name="router",
+                strategy=router or RegistryRouter(self._registry),
+                registry={
+                    "registry": RegistryRouter,
+                },
+                description="Tool dispatch strategy",
+            ),
+        }
+        self._context = context or ToolContext()
+
+    def _apply_max_concurrency(self, executor: ToolExecutor) -> None:
+        """Push the current budget onto an executor that accepts one.
+
+        SequentialExecutor ignores the knob. ParallelExecutor,
+        PartitionExecutor, and StreamingToolExecutor all track
+        ``_max_concurrency`` — we set the attribute directly so hosts can
+        tune mid-session without reconstructing the executor.
+        """
+        if hasattr(executor, "_max_concurrency"):
+            try:
+                executor._max_concurrency = self._max_concurrency  # type: ignore[attr-defined]
+            except AttributeError:
+                # Some executors may expose the attribute as a
+                # read-only descriptor — silently ignore.
+                pass
+
+    @property
+    def _executor(self) -> ToolExecutor:
+        return self._slots["executor"].strategy  # type: ignore[return-value]
+
+    @property
+    def _router(self) -> ToolRouter:
+        return self._slots["router"].strategy  # type: ignore[return-value]
+
+    @property
+    def name(self) -> str:
+        return "tool"
+
+    @property
+    def order(self) -> int:
+        return 10
+
+    @property
+    def category(self) -> str:
+        return "execution"
+
+    @property
+    def registry(self) -> ToolRegistry:
+        return self._registry
+
+    def get_strategy_slots(self) -> Dict[str, StrategySlot]:
+        return self._slots
+
+    def get_config_schema(self) -> ConfigSchema:
+        return ConfigSchema(
+            name="tool",
+            fields=[
+                ConfigField(
+                    name="max_concurrency",
+                    type="integer",
+                    label="Max Concurrency",
+                    description=(
+                        "Maximum number of tool calls that may execute in "
+                        "parallel. Applies to ParallelExecutor, "
+                        "PartitionExecutor, and StreamingToolExecutor. "
+                        "SequentialExecutor ignores this knob."
+                    ),
+                    default=_DEFAULT_MAX_CONCURRENCY,
+                    min_value=1,
+                    max_value=64,
+                    ui_widget="slider",
+                ),
+            ],
+        )
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"max_concurrency": self._max_concurrency}
+
+    def update_config(self, config: Dict[str, Any]) -> None:
+        if "max_concurrency" in config:
+            value = int(config["max_concurrency"])
+            self._max_concurrency = max(1, value)
+            self._apply_max_concurrency(self._executor)
+
+    def should_bypass(self, state: PipelineState) -> bool:
+        return not state.pending_tool_calls
+
+    def build_dispatch_context(self, state: PipelineState) -> ToolContext:
+        """Build the per-call :class:`ToolContext` for dispatch.
+
+        Extracted from ``execute`` (2.3.0) so the Stage 6 internal
+        agentic loop — via :class:`~xgen_rsi.base.stages.s10_tool.
+        dispatcher.ToolDispatcher` — constructs dispatch contexts
+        through this EXACT method instead of a parallel
+        implementation: same permission rules/mode/posture, same hook
+        runner, same HITL requester, read live off ``self._context``
+        each call so ``refresh_runtime`` swaps are visible to both
+        consumers on the next dispatch.
+        """
+        # Bind a state-mutation sink onto the context so tools /
+        # executors can apply ``ToolResult.state_mutations`` into
+        # ``state.shared`` without plumbing PipelineState down through
+        # every layer. The callback closes over the live ``state.shared``
+        # dict, so mutations take effect immediately.
+        from xgen_rsi.base.stages.s10_tool.state_mutation import (
+            apply_state_mutations as _apply_raw,
+        )
+        from xgen_rsi.base.tools.base import ToolResult as _TR
+
+        def _state_apply(mutations: Dict[str, Any], tool_name: str) -> Dict[str, Any]:
+            if not mutations:
+                return {}
+            return _apply_raw(
+                _TR(content=None, state_mutations=mutations),
+                state.shared,
+                tool_name=tool_name,
+            )
+
+        ctx = ToolContext(
+            session_id=state.session_id,
+            working_dir=self._context.working_dir,
+            storage_path=self._context.storage_path,
+            env_vars=self._context.env_vars,
+            allowed_paths=self._context.allowed_paths,
+            metadata=self._context.metadata,
+            stage_order=self.order,
+            stage_name=self.name,
+            state_apply=_state_apply,
+            # Read-only handle so introspection tools (e.g. ToolSearch)
+            # can see the live tool descriptors + shared state. Tools
+            # MUST NOT mutate — use state_mutations / state_apply instead.
+            state_view=state,
+            # The live registry — ToolSearch searches the FULL catalogue
+            # through it (deferred tools included) and activates matches.
+            tool_registry=self._registry,
+            # Phase 5: propagate the host-attached HookRunner so the
+            # router can fire PRE_TOOL_USE / POST_TOOL_USE / POST_TOOL_
+            # FAILURE around dispatch. ``None`` is the default no-op.
+            hook_runner=getattr(self._context, "hook_runner", None),
+            permission_mode=getattr(self._context, "permission_mode", "default") or "default",
+            # Phase 7 (S7.4): host-attached permission matrix evaluated
+            # by ``RegistryRouter`` before any hooks fire. Empty list
+            # (the default) means no matrix is configured and dispatch
+            # behaves exactly as it did pre-Phase-7.
+            permission_rules=list(getattr(self._context, "permission_rules", None) or []),
+            # Host-attached tool settings (e.g. ``extras["web_search"]
+            # ["brave_api_key"]``) read LIVE off ``self._context`` each
+            # dispatch — so a value edited at runtime (the ``env`` tool's
+            # set_setting) is visible on the very next tool call. Shallow-
+            # copied so a buggy tool can't drop session-wide keys; nested
+            # setting dicts stay shared (the edit path the controller uses).
+            extras=dict(getattr(self._context, "extras", None) or {}),
+            # The self-modifying-environment controller — likewise read live
+            # so the built-in ``env`` tool reaches it through real dispatch
+            # (not just direct calls). Without this it would see ``None``.
+            environment=getattr(self._context, "environment", None),
+            # The agent's Geny sandbox session. THIS is what makes Bash /
+            # Read / Write / Edit / Glob / Grep run inside the agent's own
+            # isolated sandbox instead of on the serving pod. The host
+            # attaches it via ``attach_runtime(tool_context=...)``; if it is
+            # dropped here every file/shell tool silently degrades to the
+            # pod (context.sandbox is None -> local subprocess), which is a
+            # correctness + tenancy bug, not a graceful fallback. Read live
+            # off ``self._context`` so a session attached after the stage
+            # was constructed still routes correctly.
+            sandbox=getattr(self._context, "sandbox", None),
+            # Structured-event sink so long-running tools (Bash streaming)
+            # can surface progress; ``None`` is the no-op default.
+            event_emit=getattr(self._context, "event_emit", None),
+            # The LLM tool_use block this dispatch belongs to — lets nested
+            # tool calls (e.g. ToolBatch members) attribute their events correctly.
+            parent_tool_use_id=getattr(self._context, "parent_tool_use_id", None),
+            # Host tool-result filter (4.71.0) — read live like the fields
+            # above so the SDK loop, the Stage 6 internal dispatcher and the
+            # CLI tool surface (all build their context HERE) apply the same
+            # post-processing. ToolBatch members reuse this context.
+            result_filter=getattr(self._context, "result_filter", None),
+        )
+
+        # 2.2.0 (audit §1-5 — policy via config): the permission posture
+        # and the HITL requester travel as *dynamic* attributes rather
+        # than declared ToolContext fields — the field list lives in
+        # tools/base.py, which a parallel workstream owns this release.
+        # ``RegistryRouter`` reads both defensively via ``getattr``, the
+        # same convention ``hook_runner`` used before it became a field.
+        # Hosts set them on the stage context (``attach_runtime(
+        # tool_context=...)`` or direct attribute assignment).
+        for _runtime_attr in ("permission_default_posture", "hitl_requester"):
+            _val = getattr(self._context, _runtime_attr, None)
+            if _val is not None:
+                setattr(ctx, _runtime_attr, _val)
+
+        # 한 호출 안에서 다른 도구를 부르는 도구(ToolBatch)가 스테이지와 같은 허용 목록을
+        # 지키게 한다 — 모델이 직접 부를 수 없는 도구를 배치로 우회하면 안 된다.
+        ctx.tool_allowed = self.tool_binding.is_allowed  # type: ignore[attr-defined]
+
+        return ctx
+
+    async def dispatch_calls(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        state: PipelineState,
+        *,
+        add_event: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """도구 호출 묶음을 실행하고 ``tool_result`` 블록을 돌려준다 — **메시지는 건드리지 않는다.**
+
+        파이프라인 루프(:meth:`execute`)와 CLI 백엔드의 도구 표면(``host.tool_surface``)이 **같은
+        함수**로 도구를 부른다. 둘이 따로 부르면 같은 도구가 백엔드마다 다르게 굴었다 — 읽기 장부
+        (Read 전에 Write 금지)·반복 실패 차단·같은 호출 건너뛰기·사람의 거부 존중·"sandbox 에 없으면
+        기기도 보라" 안내가 CLI 에서만 빠져 있었다(2026-09-30 감사).
+
+        ``add_event`` — 이벤트를 받을 곳. 기본은 ``state.add_event``. CLI 표면은 자기 싱크를 준다:
+        CLI 는 자기 도구 사건을 스트림으로 이미 알리므로, 여기서 또 내면 화면에 두 번 뜬다.
+        """
+        emit = add_event if add_event is not None else state.add_event
+        binding = self.tool_binding
+        for tc in tool_calls:
+            tool_name = tc.get("tool_name", "")
+            if not binding.is_allowed(tool_name):
+                raise ToolAccessDenied(tool_name, self.order)
+
+        ctx = self.build_dispatch_context(state)
+
+        router = self._router
+        if isinstance(router, RegistryRouter):
+            router.bind_registry(self._registry)
+
+        # PartitionExecutor needs direct registry access to peek at each
+        # tool's ``capabilities(input)`` before deciding parallel vs
+        # serial. Other executors ignore the bind call.
+        executor_strategy = self._executor
+        bind_registry = getattr(executor_strategy, "bind_registry", None)
+        if callable(bind_registry):
+            bind_registry(self._registry)
+
+        # Re-apply the stage-level concurrency budget each turn — this
+        # handles the case where an executor was swapped in via
+        # ``StrategySlot.swap`` (which rebuilds with no args) and would
+        # otherwise default to its class-level budget.
+        self._apply_max_concurrency(executor_strategy)
+
+        # 같은 오류로 반복 실패해 차단된 도구는 실행하지 않고 차단 결과를 돌려준다.
+        precomputed: Dict[str, Dict[str, Any]] = {}
+        runnable = []
+        skipped_same: List[str] = []
+        from xgen_rsi.base.stages.s10_tool import denial_guard
+
+        for tc in tool_calls:
+            # 사람이 이번 턴에 거부한 동작은 다시 묻지 않는다 — 확인 창이 거듭 뜨면 결국 잘못
+            # 눌린다(denial_guard). 반복 가드보다 먼저 본다: 거부는 첫 번째가 곧 답이다.
+            blocked = denial_guard.refused_result(tc, state.shared)
+            if blocked is None:
+                blocked = repeat_guard.blocked_result(tc, state.shared)
+            if blocked is None:
+                blocked = repeat_guard.skip_identical(tc, state.shared)
+                if blocked is not None:
+                    skipped_same.append(str(tc.get("tool_name") or ""))
+            if blocked is not None:
+                precomputed[str(tc.get("tool_use_id") or "")] = blocked
+            else:
+                runnable.append(tc)
+        executed = (
+            await executor_strategy.execute_all(runnable, router, ctx, on_event=emit)
+            if runnable
+            else []
+        )
+        if precomputed:
+            # 실행을 거부한 호출 수 — 쌓이면 Stage 16 이 턴을 끝낸다(s16_loop/repeat_stop.py).
+            from xgen_rsi.base.stages.s16_loop.repeat_stop import note_refused
+
+            note_refused(state.shared, len(precomputed))
+            by_id = {str(r.get("tool_use_id") or ""): r for r in executed}
+            results = [
+                precomputed.get(str(tc.get("tool_use_id") or ""))
+                or by_id.get(str(tc.get("tool_use_id") or ""))
+                for tc in tool_calls
+            ]
+            results = [r for r in results if r is not None]
+            emit(
+                "tool.repeat_blocked",
+                {
+                    "tools": sorted(
+                        {
+                            str(tc.get("tool_name") or "")
+                            for tc in tool_calls
+                            if str(tc.get("tool_use_id") or "") in precomputed
+                        }
+                    )
+                },
+            )
+        else:
+            results = executed
+        newly_denied = denial_guard.observe(tool_calls, results, state.shared)
+        if newly_denied:
+            emit("tool.user_denied", {"tools": sorted(set(newly_denied))})
+        flagged = repeat_guard.observe(tool_calls, results, state.shared)
+        if flagged:
+            emit(
+                "tool.repeat_failure",
+                {"tools": [{"name": n, "count": c} for n, c in flagged]},
+            )
+        same = repeat_guard.observe_same(tool_calls, results, state.shared)
+        if same or skipped_same:
+            emit(
+                "tool.same_result",
+                {
+                    "tools": [{"name": n, "count": c} for n, c in same],
+                    "skipped": sorted(set(skipped_same)),
+                },
+            )
+
+        # 사용자 기기 폴더가 연결된 대화에서, sandbox 도구가 "없음" 을 돌려주거나 기기 경로를 받으면
+        # 기기 도구를 가리키는 안내를 붙인다(second_machine).
+        noted = second_machine.annotate(
+            tool_calls, results, self._registry.list_names(), state.shared
+        )
+        if noted:
+            emit("tool.not_in_sandbox", {"count": noted})
+        return results
+
+    async def execute(self, input: Any, state: PipelineState) -> Any:
+        if not state.pending_tool_calls:
+            return input
+
+        tool_calls = list(state.pending_tool_calls)
+
+        binding = self.tool_binding
+        for tc in tool_calls:
+            tool_name = tc.get("tool_name", "")
+            if not binding.is_allowed(tool_name):
+                raise ToolAccessDenied(tool_name, self.order)
+
+        state.add_event(
+            "tool.execute_start",
+            {
+                "count": len(tool_calls),
+                "tools": [tc["tool_name"] for tc in tool_calls],
+            },
+        )
+
+        results = await self.dispatch_calls(tool_calls, state)
+
+        state.add_message("user", results)
+        state.tool_results = results
+        # Cumulative tool-call counter (audit R2): state.tool_results is
+        # REPLACED each round, so ToolCallBudget can't count across rounds
+        # from it. Maintain a running total in shared for the guard.
+        state.shared["executor.tool_calls_total"] = int(
+            state.shared.get("executor.tool_calls_total", 0)
+        ) + len(results)
+        state.pending_tool_calls = []
+        state.loop_decision = "continue"
+
+        state.add_event(
+            "tool.execute_complete",
+            {
+                "count": len(results),
+                "errors": sum(1 for r in results if r.get("is_error")),
+            },
+        )
+
+        return input

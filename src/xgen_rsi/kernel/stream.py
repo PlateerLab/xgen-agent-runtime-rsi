@@ -23,7 +23,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
-from xgen_agent_runtime.core.run_status import RunStatus
+from xgen_rsi.base.core.run_status import RunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class _CancelRequested(Exception):
 
 def _indicator(tool_name: str) -> Optional[Dict[str, Any]]:
     try:
-        from xgen_agent_runtime.host.tool_indicators import get_indicator
+        from xgen_rsi.base.host.tool_indicators import get_indicator
 
         return get_indicator(tool_name)
     except Exception:  # noqa: BLE001
@@ -189,7 +189,7 @@ class TurnDriver:
 
     # ── 공통 ────────────────────────────────────────────────────────────
     def _usage(self) -> Optional[Dict[str, Any]]:
-        from xgen_agent_runtime.host.harness_components import harness_summary
+        from xgen_rsi.base.host.harness_components import harness_summary
 
         state = self.plan.state
         last = getattr(state, "last_api_response", None)
@@ -204,7 +204,7 @@ class TurnDriver:
 
     async def _slice_task(self, pipeline_input: Any, continuation: bool) -> None:
         """슬라이스 하나를 돌리고 수명 사건을 낸다(기존 run_stream 의 pipeline.complete/error 와 같은 자료)."""
-        from xgen_agent_runtime.core.errors import ExecutorErrorCode, GenyExecutorError
+        from xgen_rsi.base.core.errors import ExecutorErrorCode, GenyExecutorError
 
         hub = self.p.hub
         state = self.plan.state
@@ -253,7 +253,7 @@ class TurnDriver:
 
     # ── 스트리밍 ────────────────────────────────────────────────────────
     def stream(self) -> Iterator[Chunk]:
-        from xgen_agent_runtime.host.runner import SUSPEND_NOTICE, _stop_notice
+        from xgen_rsi.base.host.runner import SUSPEND_NOTICE, _stop_notice
 
         plan = self.plan
         state = plan.state
@@ -461,7 +461,7 @@ class TurnDriver:
 
     # ── 비스트리밍 ──────────────────────────────────────────────────────
     def run(self) -> str:
-        from xgen_agent_runtime.host.runner import _stop_notice
+        from xgen_rsi.base.host.runner import _stop_notice
 
         plan = self.plan
         state = plan.state

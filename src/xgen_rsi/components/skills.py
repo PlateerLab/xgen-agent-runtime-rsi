@@ -14,8 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
-
+from xgen_rsi.base.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 from xgen_rsi.harness.runtime import Component
 
 _FRONT = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.S)

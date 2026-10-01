@@ -1,7 +1,7 @@
 """context_mgmt 구성요소 — 호출 전 메시지 구성: 기억 검색 주입, 비용 트리거 정리, 용량 트리거 압축, 예산 가드.
 
 메커니즘(``prune_messages``, ``run_compaction`` + ``LLMSummaryCompactor``, ``estimate_prompt_tokens``,
-``TokenBudgetGuard``)은 기존 런타임 함수를 쓰고, **언제 무엇을 할지**는 여기서 정한다. 임계값이 전부
+``TokenBudgetGuard``)은 바탕 런타임(``xgen_rsi.base``) 함수를 쓰고, **언제 무엇을 할지**는 여기서 정한다. 임계값이 전부
 파라미터라 RRSI 의 편집 대상이 된다(기존엔 0.8/0.7 이 코드에 박혀 있었다 — 조사 13 문서 §3.5).
 
 압축 요약 호출은 ``state.llm_client``(원장 클라이언트)를 지나므로 원장에 ``compact`` 로 남는다.
@@ -43,7 +43,7 @@ class StandardContextComponent(Component):
         return bool(rt.plan.pipeline_kwargs.get("enable_compaction", True))
 
     def _prune_over(self, rt: Any) -> int:
-        from xgen_agent_runtime.core.context_prune import DEFAULT_PRUNE_OVER_TOKENS
+        from xgen_rsi.base.core.context_prune import DEFAULT_PRUNE_OVER_TOKENS
 
         # 에이전트(노드)가 명시했으면 그 값(0 = 끔), 아니면 하네스 값, 그것도 없으면 런타임 기본.
         node = rt.plan.pipeline_kwargs.get("prune_over_tokens")
@@ -54,7 +54,7 @@ class StandardContextComponent(Component):
 
     def compactor(self) -> Any:
         if self._compactor is None:
-            from xgen_agent_runtime.stages.s02_context.artifact.default.compactors import (
+            from xgen_rsi.base.stages.s02_context.artifact.default.compactors import (
                 LLMSummaryCompactor,
             )
 
@@ -63,10 +63,10 @@ class StandardContextComponent(Component):
 
     # ── 호출 전 ────────────────────────────────────────────────────────
     async def before_call(self, rt: Any) -> None:
-        from xgen_agent_runtime.core.compaction import run_compaction
-        from xgen_agent_runtime.core.context_prune import prune_messages
-        from xgen_agent_runtime.core.shared_keys import SharedKeys
-        from xgen_agent_runtime.core.token_estimate import estimate_prompt_tokens
+        from xgen_rsi.base.core.compaction import run_compaction
+        from xgen_rsi.base.core.context_prune import prune_messages
+        from xgen_rsi.base.core.shared_keys import SharedKeys
+        from xgen_rsi.base.core.token_estimate import estimate_prompt_tokens
 
         state = rt.state
         first = rt.iteration == 0 and not rt.is_continuation
@@ -159,9 +159,9 @@ class StandardContextComponent(Component):
         """
         if not self._enabled(rt) or not self.param("guard", True):
             return
-        from xgen_agent_runtime.core.compaction import run_compaction
-        from xgen_agent_runtime.core.errors import GuardRejectError
-        from xgen_agent_runtime.stages.s04_guard.artifact.default.guards import TokenBudgetGuard
+        from xgen_rsi.base.core.compaction import run_compaction
+        from xgen_rsi.base.core.errors import GuardRejectError
+        from xgen_rsi.base.stages.s04_guard.artifact.default.guards import TokenBudgetGuard
 
         state = rt.state
         max_tokens = int(rt.plan.pipeline_kwargs.get("max_tokens", 8192))

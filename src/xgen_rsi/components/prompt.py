@@ -92,7 +92,7 @@ class SystemPromptComponent(Component):
         self._catalog = ""
 
     def _make_builder(self, base: str, with_memory: bool) -> Any:
-        from xgen_agent_runtime.stages.s03_system.artifact.default.builders import (
+        from xgen_rsi.base.stages.s03_system.artifact.default.builders import (
             ComposablePromptBuilder,
             CustomBlock,
             DateTimeBlock,
@@ -145,7 +145,7 @@ class SystemPromptComponent(Component):
         if registry is not None:
             version = getattr(registry, "version", None)
             if self._catalog_version != version:
-                from xgen_agent_runtime.tools.catalog import deferred_catalog_text
+                from xgen_rsi.base.tools.catalog import deferred_catalog_text
 
                 self._catalog = deferred_catalog_text(registry)
                 self._catalog_version = version

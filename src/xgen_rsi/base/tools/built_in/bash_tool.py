@@ -1,0 +1,472 @@
+"""BashTool — execute shell commands."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+import sys
+from typing import Any, Dict, FrozenSet, Mapping, Optional
+
+from xgen_rsi.base.tools.base import (
+    HOST_IS_EXECUTION_TARGET,
+    Tool,
+    ToolContext,
+    ToolResult,
+)
+
+logger = logging.getLogger(__name__)
+
+# Host env vars the model's shell is allowed to inherit (audit S3). The
+# non-sandbox path used ``os.environ.copy()``, handing every backend
+# secret (ANTHROPIC_API_KEY, GENY_AUTH_SECRET, DB URLs, …) to any command
+# the model runs. We inherit only a benign base; the host injects anything
+# the workload legitimately needs via ``ToolContext.env_vars``. Set
+# ``GENY_BASH_INHERIT_ENV=1`` to restore the old full-inherit behavior for
+# a fully-trusted single-tenant deployment.
+_SAFE_ENV_KEYS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LANGUAGE",
+        "TERM",
+        "TZ",
+        "TMPDIR",
+        "PWD",
+        "HOSTNAME",
+        "DISPLAY",
+        "COLUMNS",
+        "LINES",
+    }
+)
+
+# Windows additions (desktop host — the connector sidecar runs this tool
+# directly on the user's PC). A child spawned without ``SystemRoot`` fails
+# to initialise Winsock/CRT, ``COMSPEC``/``PATHEXT`` are needed for the
+# shell to resolve commands at all, and ``HOME`` is normally unset there
+# (``USERPROFILE`` is the home). Kept as a local fallback table; the CLI
+# runtime's authoritative Windows whitelist is reused when importable.
+_SAFE_ENV_KEYS_WINDOWS_FALLBACK = frozenset(
+    {
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "SYSTEMDRIVE",
+        "USERNAME",
+    }
+)
+
+
+def _windows_env_keys() -> FrozenSet[str]:
+    """Windows whitelist — ``_cli_runtime``'s table when importable (one
+    source of truth with the CLI subprocess env), else the local fallback."""
+    try:
+        from xgen_rsi.base.llm_client._cli_runtime import _ENV_WHITELIST_WINDOWS
+
+        return frozenset(_ENV_WHITELIST_WINDOWS) | _SAFE_ENV_KEYS_WINDOWS_FALLBACK
+    except Exception:  # noqa: BLE001 — import cycle / layout drift: fall back
+        return _SAFE_ENV_KEYS_WINDOWS_FALLBACK
+
+
+def _scrubbed_env(
+    extra: Optional[Mapping[str, str]],
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+    platform: Optional[str] = None,
+) -> Dict[str, str]:
+    """Benign base env for the host-path subprocess.
+
+    Platform-aware: on Windows (``platform == "win32"``) the process
+    bootstrap variables are whitelisted too and matching is
+    case-insensitive (``Path`` vs ``PATH``, ``SystemRoot`` vs
+    ``SYSTEMROOT`` — the parent's spelling is preserved); ``HOME`` is
+    mapped from ``USERPROFILE`` when unset so ``~``/``$HOME`` resolve. The
+    ``environ``/``platform`` knobs exist for tests — production reads
+    ``os.environ`` / ``sys.platform``.
+    """
+    source: Mapping[str, str] = os.environ if environ is None else environ
+    plat = sys.platform if platform is None else platform
+    is_windows = plat == "win32"
+
+    if str(source.get("GENY_BASH_INHERIT_ENV", "")).strip() in ("1", "true", "yes"):
+        env: Dict[str, str] = dict(source)
+    elif is_windows:
+        allowed_ci = {k.upper() for k in (_SAFE_ENV_KEYS | _windows_env_keys())}
+        env = {
+            k: v
+            for k, v in source.items()
+            if k.upper() in allowed_ci or k.upper().startswith("LC_")
+        }
+        # PATH must exist under SOME spelling; only synthesise when absent.
+        if not any(k.upper() == "PATH" for k in env):
+            system_root = next((v for k, v in env.items() if k.upper() == "SYSTEMROOT"), "")
+            if system_root:
+                env["PATH"] = f"{system_root}\\System32;{system_root}"
+        if not any(k.upper() == "HOME" for k in env):
+            profile = next((v for k, v in env.items() if k.upper() == "USERPROFILE"), "")
+            if profile:
+                env["HOME"] = profile
+    else:
+        env = {k: v for k, v in source.items() if k in _SAFE_ENV_KEYS or k.startswith("LC_")}
+        env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _host_shell_argv(command: str, *, platform: Optional[str] = None) -> Optional[list]:
+    """호스트 실행(샌드박스 없음)에서 명령을 돌릴 shell argv.
+
+    Windows 는 bash 가 없다 — 커넥터 로컬 셸 도구와 동일하게 **PowerShell** 로 돈다
+    (``powershell.exe -NoProfile -NonInteractive -Command <cmd>``). PowerShell 이 없으면
+    (매우 드묾) ``cmd.exe /d /s /c`` 로 폴백. POSIX 는 None 을 돌려 기존 경로
+    (``create_subprocess_shell`` = ``/bin/sh -c``)를 그대로 쓴다.
+
+    반환 None → create_subprocess_shell(command) (POSIX).
+    반환 [file, *args] → create_subprocess_exec(*argv) (Windows).
+    """
+    plat = sys.platform if platform is None else platform
+    if plat != "win32":
+        return None
+    pwsh = _which_windows("powershell.exe") or _which_windows("pwsh.exe")
+    if pwsh:
+        return [pwsh, "-NoProfile", "-NonInteractive", "-Command", command]
+    comspec = os.environ.get("ComSpec") or os.environ.get("COMSPEC") or "cmd.exe"
+    return [comspec, "/d", "/s", "/c", command]
+
+
+def _which_windows(name: str) -> Optional[str]:
+    """PATH 에서 실행 파일을 찾는다(Windows). 없으면 None — shutil.which 얇은 래퍼."""
+    try:
+        import shutil
+
+        return shutil.which(name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_DEFAULT_TIMEOUT_MS = 120_000  # 2 minutes
+
+# Commands that try to leave a process running after the command returns.
+# In the sandbox that never works: exec is request/response, and the
+# session's shell isolation reaps the whole process namespace when the
+# command exits. Before this guard the agent would run
+# ``nohup npx serve … &``, wait out the timeout, and get a bare failure
+# (2026-09-18). The right door for a long-running server is the app
+# skill (AppCreate/AppPublish — the runner supervises the
+# process); for long batch work, run it in the foreground with a larger
+# timeout or use the job skill.
+_DETACH_RE = re.compile(
+    r"(?:^|[;&|(]\s*)(?:nohup|setsid|disown)\b"  # explicit detach verbs
+    r"|(?<![&|])&\s*(?:$|[;)]|\n)"  # a single trailing '&' (not '&&', '|&')
+)
+
+
+def _detached_process_reason(command: str) -> Optional[str]:
+    """Why a command that detaches a process cannot do what it intends here."""
+    if not _DETACH_RE.search(command):
+        return None
+    return (
+        "This command tries to leave a process running in the background "
+        "(nohup / setsid / trailing &). In the sandbox that never survives the "
+        "command: exec is request/response and the process namespace is reaped "
+        "when the command exits, so the server or job would die immediately "
+        "while this call waits out its timeout.\n"
+        "- To serve an application: use the app skill — AppGuide, then "
+        "AppCreate / AppPublish. The runner supervises that process and "
+        "gives it an address.\n"
+        "- To run long work: run it in the foreground with a larger `timeout`, or "
+        "use the job skill (JobGuide) for work that must outlive this turn."
+    )
+
+
+_MAX_TIMEOUT_MS = 600_000  # 10 minutes
+_MAX_OUTPUT = 100_000  # characters
+
+
+async def _finish_result(
+    *,
+    stdout: str,
+    stderr: str,
+    exit_code: int,
+    sandboxed: bool,
+    input: Dict[str, Any],
+    context: ToolContext,
+    stdout_total_bytes: int | None = None,
+    stderr_total_bytes: int | None = None,
+) -> ToolResult:
+    """Shape command output and enforce an optional artifact contract."""
+    if len(stdout) > _MAX_OUTPUT:
+        suffix = f", {stdout_total_bytes} bytes total" if stdout_total_bytes is not None else ""
+        stdout = stdout[:_MAX_OUTPUT] + f"\n\n... (truncated{suffix})"
+    if len(stderr) > _MAX_OUTPUT:
+        suffix = f", {stderr_total_bytes} bytes total" if stderr_total_bytes is not None else ""
+        stderr = stderr[:_MAX_OUTPUT] + f"\n\n... (truncated{suffix})"
+    parts = []
+    if stdout:
+        parts.append(stdout)
+    if stderr:
+        parts.append(f"STDERR:\n{stderr}")
+    if exit_code != 0:
+        parts.append(f"Exit code: {exit_code}")
+
+    metadata: Dict[str, Any] = {"exit_code": exit_code, "sandboxed": sandboxed}
+    if not sandboxed:
+        metadata["execution_environment"] = "host"
+    validation_failed = False
+    contracts = input.get("artifact_contracts")
+    if isinstance(contracts, list) and contracts:
+        from xgen_rsi.base.tools.built_in._artifact_contract import (
+            validate_artifact_contracts,
+        )
+
+        report = await validate_artifact_contracts(contracts, context)
+        parts.append(report.message)
+        metadata["artifact_validation"] = report.metadata()
+        validation_failed = not report.ok
+
+    artifacts: Dict[str, Any] = {}
+    if "artifact_validation" in metadata:
+        artifacts["validated"] = metadata["artifact_validation"].get("checked", [])
+    return ToolResult(
+        content="\n".join(parts) if parts else "(no output)",
+        is_error=exit_code != 0 or validation_failed,
+        metadata=metadata,
+        artifacts=artifacts,
+    )
+
+
+class BashTool(Tool):
+    """Execute a bash command and return stdout/stderr.
+
+    Commands run in the session's working directory with configurable
+    timeout and environment variable injection.
+    """
+
+    @property
+    def name(self) -> str:
+        return "Bash"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Run a shell command in your sandbox — your own isolated workspace on the "
+            "server, where all your work runs. Commands start in your working folder; you "
+            "can read and write there and install what you need (`pip install ...`, "
+            "`npm install ...`). It is a Linux shell: use bash/sh syntax. It cannot reach "
+            "the user's own devices — for folders the user connected, use the device tools. "
+            "Returns stdout, stderr, and exit code; a configurable timeout applies."
+        )
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute.",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": f"Timeout in milliseconds (default: {_DEFAULT_TIMEOUT_MS}, max: {_MAX_TIMEOUT_MS}).",
+                    "minimum": 1000,
+                    "maximum": _MAX_TIMEOUT_MS,
+                },
+                "artifact_contracts": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "description": (
+                        "Optional deterministic checks run after a command. "
+                        "Use workspace-relative paths. The runtime reopens each output "
+                        "with a standard parser before Bash returns. Only JSON, CSV and "
+                        "text outputs are checked; binary files (xlsx, docx, images) are skipped."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "path": {"type": "string"},
+                            "format": {"type": "string", "enum": ["text", "json", "csv"]},
+                            "columns": {"type": "array", "items": {"type": "string"}},
+                            "allowed_values": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "unique_by": {"type": "array", "items": {"type": "string"}},
+                            "exact_rows": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": (
+                                    "Only a count the request itself states. A mismatch is "
+                                    "reported as a note, not a failure."
+                                ),
+                            },
+                            "min_rows": {"type": "integer", "minimum": 0},
+                            "max_rows": {"type": "integer", "minimum": 0},
+                            "required_keys": {
+                                "type": "array",
+                                "description": (
+                                    "Keys required on a top-level JSON object or on every "
+                                    "object in a top-level JSON array."
+                                ),
+                                "items": {"type": "string"},
+                            },
+                            "array_lengths": {
+                                "type": "object",
+                                "additionalProperties": {"type": "integer", "minimum": 0},
+                            },
+                            "required_strings": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "forbidden_strings": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["path", "format"],
+                    },
+                },
+            },
+            "required": ["command"],
+        }
+
+    async def execute(self, input: Dict[str, Any], context: ToolContext) -> ToolResult:
+        command = input.get("command", "").strip()
+        if not command:
+            return ToolResult(content="command must not be empty", is_error=True)
+
+        timeout_ms = min(input.get("timeout", _DEFAULT_TIMEOUT_MS), _MAX_TIMEOUT_MS)
+        timeout_s = timeout_ms / 1000.0
+
+        # Sandbox: run the command in the agent's Geny session instead
+        # of on the host. Same output shaping as the host path below.
+        if context.sandbox is not None:
+            from xgen_rsi.base.tools._geny_sandbox import sb_run
+
+            detached = _detached_process_reason(command)
+            if detached:
+                # Don't spend the timeout to learn what we already know.
+                return ToolResult(content=detached, is_error=True)
+
+            try:
+                exit_code, stdout, stderr = await sb_run(
+                    context.sandbox,
+                    command,
+                    workdir=context.working_dir or "/workspace",
+                    env=context.env_vars,
+                    timeout_s=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                return ToolResult(content=f"Command timed out after {timeout_ms}ms", is_error=True)
+            except Exception as e:  # noqa: BLE001
+                return ToolResult(content=f"Sandbox exec failed: {e}", is_error=True)
+            return await _finish_result(
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=exit_code,
+                sandboxed=True,
+                input=input,
+                context=context,
+            )
+
+        # No sandbox attached — which of two very different situations is this?
+        #
+        #   (a) The host IS the execution target: the desktop connector's local
+        #       turn runs on the user's own PC, where "no sandbox" is the whole
+        #       point (path guard = allowed_paths). Hosts say so by setting
+        #       ``extras[HOST_IS_EXECUTION_TARGET]``.
+        #   (b) Anything else: a serving pod that was supposed to have a runner
+        #       session. The command then quietly touches the pod and the files
+        #       vanish with it — that must never pass silently.
+        #
+        # Warning on (a) too would be a false alarm every single local turn, and
+        # it told the reader to go "check sandbox propagation" for something that
+        # is working exactly as designed.
+        if context.extras.get(HOST_IS_EXECUTION_TARGET):
+            logger.debug("Bash executing on the host (local run — no sandbox by design)")
+        else:
+            logger.warning(
+                "Bash executing on the HOST (no sandbox attached to ToolContext); "
+                "command will run on the serving pod, not in an isolated session. "
+                "This is a degraded path — check that the agent's sandbox session "
+                "is being propagated into the tool dispatch context."
+            )
+        cwd = context.working_dir or None
+
+        # Build a SCRUBBED environment (audit S3): a benign base +
+        # host-injected env_vars, never the backend's full secret-bearing
+        # os.environ.
+        env = _scrubbed_env(context.env_vars)
+
+        # Windows 호스트(커넥터 로컬)는 bash 가 없으므로 PowerShell 로 돈다 — 셸 선택은
+        # _host_shell_argv 가 캡슐화한다(POSIX 는 None → 기존 /bin/sh 경로).
+        shell_argv = _host_shell_argv(command)
+        try:
+            if shell_argv is not None:
+                proc = await asyncio.create_subprocess_exec(
+                    *shell_argv,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    env=env,
+                )
+            else:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    env=env,
+                )
+        except OSError as e:
+            return ToolResult(content=f"Failed to start process: {e}", is_error=True)
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            try:
+                await proc.wait()
+            except Exception:
+                pass
+            return ToolResult(
+                content=f"Command timed out after {timeout_ms}ms",
+                is_error=True,
+            )
+
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        exit_code = proc.returncode or 0
+
+        return await _finish_result(
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+            sandboxed=False,
+            input=input,
+            context=context,
+            stdout_total_bytes=len(stdout_bytes),
+            stderr_total_bytes=len(stderr_bytes),
+        )

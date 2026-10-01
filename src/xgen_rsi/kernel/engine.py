@@ -21,8 +21,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from xgen_agent_runtime.core.run_status import RunStatus, TerminationReason
-
+from xgen_rsi.base.core.run_status import RunStatus, TerminationReason
 from xgen_rsi.harness.runtime import TurnRuntime
 from xgen_rsi.kernel.model_call import ModelCaller
 from xgen_rsi.kernel.recorder import TrajectoryRecorder
@@ -64,12 +63,12 @@ class TurnEngine:
 
     # ── 입력 ────────────────────────────────────────────────────────────
     def _accept_input(self, pipeline_input: Any, continuation: bool) -> None:
-        from xgen_agent_runtime.core.errors import StageError
-        from xgen_agent_runtime.core.message_repair import repair_dangling_tool_calls
-        from xgen_agent_runtime.stages.s01_input.artifact.default.normalizers import (
+        from xgen_rsi.base.core.errors import StageError
+        from xgen_rsi.base.core.message_repair import repair_dangling_tool_calls
+        from xgen_rsi.base.stages.s01_input.artifact.default.normalizers import (
             DefaultNormalizer,
         )
-        from xgen_agent_runtime.stages.s01_input.artifact.default.validators import DefaultValidator
+        from xgen_rsi.base.stages.s01_input.artifact.default.validators import DefaultValidator
 
         state = self.rt.state
         repaired = repair_dangling_tool_calls(state.messages)
@@ -93,7 +92,7 @@ class TurnEngine:
         state.token_usage += usage
         state.turn_token_usage.append(usage)
         if self._pricing is None:
-            from xgen_agent_runtime.stages.s07_token.artifact.default.pricing import (
+            from xgen_rsi.base.stages.s07_token.artifact.default.pricing import (
                 AnthropicPricingCalculator,
             )
 
@@ -121,7 +120,7 @@ class TurnEngine:
 
     # ── 한 슬라이스 ─────────────────────────────────────────────────────
     async def run_slice(self, pipeline_input: Any, *, continuation: bool) -> SliceOutcome:
-        from xgen_agent_runtime.stages.s06_api.artifact.default.tool_loop import (
+        from xgen_rsi.base.stages.s06_api.artifact.default.tool_loop import (
             assistant_content_blocks,
         )
 

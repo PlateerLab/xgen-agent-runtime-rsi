@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
-from xgen_agent_runtime.host import runner as runner_mod
-
 from tests.kernel.fakes import EchoTool, ScriptedClient, text_step, tool_step
 from xgen_rsi import GenyRSI
+from xgen_rsi.base.host import runner as runner_mod
 
 
 def _client(script, seen=None):

@@ -1,0 +1,30 @@
+"""Prompt builders — backward-compatible re-export wrapper."""
+
+from xgen_rsi.base.stages.s03_system.interface import PromptBuilder, PromptBlock
+from xgen_rsi.base.stages.s03_system.artifact.default.builders import (
+    StaticPromptBuilder,
+    MutablePromptBuilder,
+    ComposablePromptBuilder,
+    PersonaBlock,
+    RulesBlock,
+    DateTimeBlock,
+    TurnNotesBlock,
+    MemoryContextBlock,
+    ToolInstructionsBlock,
+    CustomBlock,
+)
+
+__all__ = [
+    "PromptBuilder",
+    "PromptBlock",
+    "StaticPromptBuilder",
+    "MutablePromptBuilder",
+    "ComposablePromptBuilder",
+    "PersonaBlock",
+    "RulesBlock",
+    "DateTimeBlock",
+    "TurnNotesBlock",
+    "MemoryContextBlock",
+    "ToolInstructionsBlock",
+    "CustomBlock",
+]

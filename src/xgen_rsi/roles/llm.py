@@ -1,6 +1,6 @@
 """탐색 역할(proposer · critic · analyst · digester · policy-development agent · judge)의 LLM 호출.
 
-공식 RRSI 구현은 Claude Opus 4.8 on Vertex 를 직접 불렀다(``rrsi/llm.py``). 여기서는 기존 런타임의 다중 공급자
+공식 RRSI 구현은 Claude Opus 4.8 on Vertex 를 직접 불렀다(``rrsi/llm.py``). 여기서는 바탕 런타임(``xgen_rsi.base``)의 다중 공급자
 계층(``llm_client``)을 그대로 쓴다 — XGEN 에 등록된 모델이면 무엇이든 역할에 쓸 수 있다(운영 규범: 등록된 LLM 그대로,
 키는 XGEN 설정에서). 역할 호출도 원장에 남겨 **진화 비용**(정책 비용 c(τ)와 별도)을 잰다.
 
@@ -90,7 +90,7 @@ class RoleLLM:
         self._lock = threading.Lock()
 
     def _new_client(self) -> Any:
-        from xgen_agent_runtime.host.runner import build_client
+        from xgen_rsi.base.host.runner import build_client
 
         m = self.model
         if m.credentials:
@@ -121,7 +121,7 @@ class RoleLLM:
         max_retries: int = 3,
     ) -> str:
         """프롬프트 하나 → 응답 텍스트. ``json_only`` 면 JSON 부분만 돌려준다."""
-        from xgen_agent_runtime.core.config import ModelConfig
+        from xgen_rsi.base.core.config import ModelConfig
 
         cfg = ModelConfig(
             model=self.model.model,

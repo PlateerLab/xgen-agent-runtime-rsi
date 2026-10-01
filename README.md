@@ -11,6 +11,10 @@
 
 XGEN 에서는 두 에이전트로 나란히 쓴다: **Agent Geny**(`agents/geny`, geny) 와 **Agent Geny RSI**(`agents/geny-rsi`, geny-rsi).
 
+**독립 패키지다.** geny-rsi 는 xgen-agent-runtime 을 import 하지도, 의존성으로 두지도 않는다. 바탕 런타임(공급자 계층·도구·기억·
+호스트 계약·21-stage 엔진)은 xgen-agent-runtime 4.80.0 을 복사한 `xgen_rsi.base` 이고 이 저장소가 소유한다. 원본이 바뀌어도
+여기는 따로 갱신한다.
+
 [English](README.en.md) · [**상세 비교 보고서**](docs/reports/2026-10-01-geny-vs-geny-rsi.md) · [사용 가이드](docs/GUIDE.md) · [설계 문서](docs/README.md) · [계획](docs/PLAN.md)
 
 ---
@@ -21,11 +25,12 @@ XGEN 에서는 두 에이전트로 나란히 쓴다: **Agent Geny**(`agents/geny
 |---|---|---|
 | 실행 코어 | 21-stage 파이프라인(단계 번호 고정) | 고정 커널 K₀ + 𝒦 타입 구성요소 하네스 H |
 | 입력·출력 | `AgentTurnExecutor().run(host, **kwargs)` | **같다** — 청크·usage·모델 요청까지(결정적 재생으로 실측) |
-| 다중 공급자 | 등록 공급자 15종(별칭 포함 — anthropic·openai·google·vllm·bedrock·vertex·azure·ollama·claude_code_cli·codex_cli …) | **같다**(런타임의 공급자 계층을 그대로 쓴다) |
+| 다중 공급자 | 등록 공급자 15종(별칭 포함 — anthropic·openai·google·vllm·bedrock·vertex·azure·ollama·claude_code_cli·codex_cli …) | **같다**(공급자 계층 사본 `xgen_rsi.base.llm_client`) |
 | 하네스 개선 | 사람이 측정하고 고친다 | **RRSI**: 제안 → 누설 심사 → 평가 → 잡음 바닥·비용 규칙으로 채택 |
 | 탐색 | 한 번에 한 경로 | branch × attempt 격자, 탐색 정책 π_E 는 **Dream-RSI** 로 개선 |
 | 측정 단위 | 턴 로그 | 궤적 기록(발견 트리) + 정책 토큰 c(τ) — 그대로 재생 world 가 된다 |
-| 쓰는 법 | `AgentTurnExecutor().run(host, **kwargs)` | `GenyRSITurnExecutor().run(host, **kwargs)` 또는 `GenyRSI(...)` — 기존 런타임은 geny-rsi 를 모른다 |
+| 쓰는 법 | `AgentTurnExecutor().run(host, **kwargs)` | `GenyRSITurnExecutor().run(host, **kwargs)` 또는 `GenyRSI(...)` |
+| 패키지 | xgen-agent-runtime | xgen-agent-runtime-rsi — **서로 의존하지 않는다** |
 
 ```
 에이전트 A = (π, K₀, H, π_E)
@@ -55,13 +60,10 @@ XGEN 에서는 두 에이전트로 나란히 쓴다: **Agent Geny**(`agents/geny
 
 ### 설치
 
-GitHub Release 의 wheel 로 설치한다(xgen-agent-runtime 과 같은 방식, PyPI 미사용).
+GitHub Release 의 wheel 로 설치한다(PyPI 미사용). 이 패키지 하나면 된다 — xgen-agent-runtime 은 필요 없다.
 
 ```bash
-pip install \
-  "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.2.0/xgen_agent_runtime_rsi-0.2.0-py3-none-any.whl" \
-  "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl" \
-  "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl"
+pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.3.0/xgen_agent_runtime_rsi-0.3.0-py3-none-any.whl"
 ```
 
 ### 라이브러리로 — `PipelinePresets` 와 같은 사용감
@@ -76,20 +78,21 @@ worker = GenyRSI.agent(provider="openai", model="gpt-6-sol", api_key="sk-...", w
 for chunk in worker.stream_sync("reports/ 를 읽고 summary.md 를 써 줘"):
     print(chunk, end="")
 
-baseline = GenyRSI.agent(provider="openai", model="gpt-6-sol", api_key="sk-...", engine="geny")  # 같은 호출로 기존 엔진
+baseline = GenyRSI.agent(provider="openai", model="gpt-6-sol", api_key="sk-...", engine="geny")  # 같은 호출로 21-stage 엔진(geny, xgen_rsi.base 사본)
 ```
 
 ### 호스트(XGEN 서버 등)에서 — 진입점 하나
 
-기존 런타임(xgen-agent-runtime)은 이 패키지를 모르고 고치지도 않는다. 호스트는 두 패키지를 똑같이 import 하고, 턴을
-실행하는 자리에서 클래스만 고른다. 두 진입점은 같은 계약(`run(host, **kwargs)` → 글 조각 이터레이터 또는 최종 글)이다.
+두 패키지는 서로 모르고, 호스트가 각각 import 한다. 두 진입점은 같은 계약(`run(host, **kwargs)` → 글 조각 이터레이터 또는
+최종 글)이다. 호스트가 턴에 넘기는 도구·기억 객체는 그 에이전트의 패키지 것으로 만든다(Agent Geny RSI 의 턴은 `xgen_rsi.base` 의
+`Tool`·`ToolRegistry`·기억 공급자) — 한 턴 안에서 두 패키지의 객체를 섞지 않는다.
 
 | XGEN 노드 | 런타임 | 패키지 | 진입점 |
 |---|---|---|---|
 | Agent Geny (`agents/geny`) | geny | xgen-agent-runtime | `AgentTurnExecutor` |
 | Agent Geny RSI (`agents/geny-rsi`) | geny-rsi | xgen-agent-runtime-rsi | `GenyRSITurnExecutor` |
 
-XGEN 의 Agent Geny RSI 노드는 Agent Geny 노드를 이어받아 포트·세부 설정·서버 배선이 같고, 진입점만 다르다.
+XGEN 의 Agent Geny RSI 노드는 포트·세부 설정·서버 배선이 Agent Geny 와 같고, 턴은 처음부터 끝까지 이 패키지로 돈다.
 
 ```python
 from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor   # geny (기존)
@@ -140,10 +143,10 @@ rsi evolve export runs/evo ./H_star      # 채택된 하네스 → XGEN_RSI_HARN
 
 ```
 호스트 ──GenyRSITurnExecutor().run(host, **kwargs)──► xgen_rsi.assembly(턴 조립 — 호스트 계약, 런타임과 같은 동작) ──► 커널
-        (기존 엔진은 AgentTurnExecutor — 같은 계약)         공급자 계층·도구·계약 모듈은 xgen-agent-runtime 을 라이브러리로 쓴다    │
+        (기존 엔진은 AgentTurnExecutor — 같은 계약)         공급자 계층·도구·계약 모듈은 사본 xgen_rsi.base(4.80.0 복사)       │
  ┌──────────────────────── K₀ 커널 (고정) ─────────────────────────────────────────────────────────────────────────▼──┐
  │ engine    context → prompt → client_tool → guard → config → call → parse → tools → control (결정 한 자리)           │
- │ model_call 요청 조립·스트림·재시도(런타임 공급자 계층 그대로) · ledger 모든 정책 호출과 c(τ) · tools 권한·거부·반복 차단 │
+ │ model_call 요청 조립·스트림·재시도(base 공급자 계층) · ledger 모든 정책 호출과 c(τ) · tools 권한·거부·반복 차단         │
  │ stream    청크 문법·usage 1회·이어가기·취소·끝나지 못한 턴 기억 · recorder 궤적 + 발견 트리(재생 world 의 원천)          │
  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  ┌──────────────────────── H 하네스 (manifest.json, 𝒦 타입) ────────────────────────────────────────────────────────┐
@@ -193,9 +196,7 @@ rsi evolve export runs/evo ./H_star      # 채택된 하네스 → XGEN_RSI_HARN
 
 ```bash
 uv venv .venv --python 3.12
-uv pip install --python .venv/bin/python -e ".[dev]" \
-  "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl" \
-  "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl"
+uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest -q        # 테스트(실제 모델 호출 없음)
 .venv/bin/python -m mypy             # rsi_math strict
 .venv/bin/ruff check src tests experiments
@@ -212,7 +213,7 @@ uv pip install --python .venv/bin/python -e ".[dev]" \
 
 - Xia et al., *RRSI: Regularized Recursive Self-Improvement of Agent Harnesses*, arXiv:2609.24972, 2026. 코드: github.com/google-research/rrsi (Apache-2.0)
 - Zheng et al., *Dream-RSI: Recursive Self-Improvement through Evolving Worlds*, arXiv:2609.14858, 2026
-- PlateerLab, *xgen-agent-runtime* — geny(21-stage 하네스), 다중 공급자 계층, 호스트 계약
+- PlateerLab, *xgen-agent-runtime* — geny(21-stage 하네스), 다중 공급자 계층, 호스트 계약. 4.80.0 을 `xgen_rsi.base` 로 복사해 쓴다(Apache-2.0)
 
 ## 라이선스
 

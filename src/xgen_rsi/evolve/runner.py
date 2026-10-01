@@ -84,13 +84,14 @@ ENGINES = ("geny-rsi", "geny")
 
 
 def turn_executor(engine: str) -> Any:
-    """엔진 이름 → 진입점 객체. 두 진입점은 같은 ``run(host, **kwargs)`` 계약이다(기존 런타임은 이 패키지를 모른다)."""
+    """엔진 이름 → 진입점 객체. 두 진입점은 같은 ``run(host, **kwargs)`` 계약이다.
+    ``geny`` 는 이 패키지의 사본 ``xgen_rsi.base`` 의 21-stage 엔진(xgen-agent-runtime 4.80.0 복사)이다."""
     if engine == "geny-rsi":
         from xgen_rsi.turn_executor import GenyRSITurnExecutor
 
         return GenyRSITurnExecutor()
     if engine == "geny":
-        from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor
+        from xgen_rsi.base.host.turn_executor import AgentTurnExecutor
 
         return AgentTurnExecutor()
     raise ValueError(f"engine must be one of {ENGINES}, got {engine!r}")

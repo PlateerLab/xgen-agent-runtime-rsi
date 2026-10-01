@@ -8,12 +8,12 @@
     print(agent.run_sync("What is the capital of France?").text)
 
 호스트(xgen-workflow 등)에서는 ``AgentTurnExecutor().run(host, **kwargs)`` 자리를 ``GenyRSITurnExecutor().run(host, **kwargs)``
-로 바꾼다 — 같은 계약이고, 기존 런타임은 이 패키지를 모른다.
+로 바꾼다 — 같은 계약이고, xgen-agent-runtime 과 이 패키지는 서로 의존하지 않는다.
 """
 
 from typing import Any
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = ["GenyRSI", "GenyRSITurnExecutor", "LocalHost", "RunResult", "__version__"]
 

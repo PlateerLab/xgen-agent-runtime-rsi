@@ -5,10 +5,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
-from xgen_agent_runtime.core.state import TokenUsage
-from xgen_agent_runtime.llm_client.base import BaseClient, ClientCapabilities
-from xgen_agent_runtime.llm_client.types import APIResponse, ContentBlock
-from xgen_agent_runtime.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
+from xgen_rsi.base.core.state import TokenUsage
+from xgen_rsi.base.llm_client.base import BaseClient, ClientCapabilities
+from xgen_rsi.base.llm_client.types import APIResponse, ContentBlock
+from xgen_rsi.base.tools.base import Tool, ToolCapabilities, ToolContext, ToolResult
 
 
 class FakeMemoryProvider:

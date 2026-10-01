@@ -35,7 +35,7 @@ class ArchiveMemoryComponent(Component):
         if rt.memory_provider is None or not self.param("retrieve", True):
             return None
         if self._retriever is None:
-            from xgen_agent_runtime.memory.retriever import MemoryAwareRetriever
+            from xgen_rsi.base.memory.retriever import MemoryAwareRetriever
 
             self._retriever = MemoryAwareRetriever(rt.memory_provider)
         return self._retriever
@@ -44,7 +44,7 @@ class ArchiveMemoryComponent(Component):
         if rt.memory_provider is None or not self.param("archive", True):
             return
         if self._strategy is None:
-            from xgen_agent_runtime.host.conversation_archive import ConversationArchivingStrategy
+            from xgen_rsi.base.host.conversation_archive import ConversationArchivingStrategy
 
             self._strategy = ConversationArchivingStrategy(rt.memory_provider)
         try:

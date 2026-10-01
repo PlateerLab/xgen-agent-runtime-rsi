@@ -1,0 +1,40 @@
+"""Stage 3: System — assemble system prompt."""
+
+from xgen_rsi.base.stages.s03_system.interface import PromptBuilder, PromptBlock
+from xgen_rsi.base.stages.s03_system.artifact.default import (
+    SystemStage,
+    StaticPromptBuilder,
+    MutablePromptBuilder,
+    ComposablePromptBuilder,
+    PersonaBlock,
+    RulesBlock,
+    DateTimeBlock,
+    TurnNotesBlock,
+    MemoryContextBlock,
+    ToolInstructionsBlock,
+    CustomBlock,
+)
+from xgen_rsi.base.stages.s03_system.persona import (
+    DynamicPersonaPromptBuilder,
+    PersonaProvider,
+    PersonaResolution,
+)
+
+__all__ = [
+    "SystemStage",
+    "PromptBuilder",
+    "PromptBlock",
+    "StaticPromptBuilder",
+    "MutablePromptBuilder",
+    "ComposablePromptBuilder",
+    "PersonaBlock",
+    "RulesBlock",
+    "DateTimeBlock",
+    "TurnNotesBlock",
+    "MemoryContextBlock",
+    "ToolInstructionsBlock",
+    "CustomBlock",
+    "DynamicPersonaPromptBuilder",
+    "PersonaProvider",
+    "PersonaResolution",
+]

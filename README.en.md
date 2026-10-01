@@ -12,6 +12,10 @@ engineering XGEN did by hand into formulas and records.
 
 In XGEN the two run side by side as two agents: **Agent Geny** (`agents/geny`, geny) and **Agent Geny RSI** (`agents/geny-rsi`, geny-rsi).
 
+**It is an independent package.** geny-rsi neither imports nor depends on xgen-agent-runtime. Its base runtime (provider layer,
+tools, memory, host contract, the 21-stage engine) is `xgen_rsi.base`, a copy of xgen-agent-runtime 4.80.0 owned by this repo and
+updated separately when the original changes.
+
 [한국어](README.md) · [**Detailed comparison report**](docs/reports/2026-10-01-geny-vs-geny-rsi.en.md) · [Usage guide (Korean)](docs/GUIDE.md) · [Design docs (Korean)](docs/README.md) · [Plan (Korean)](docs/PLAN.md)
 
 ---
@@ -22,11 +26,12 @@ In XGEN the two run side by side as two agents: **Agent Geny** (`agents/geny`, g
 |---|---|---|
 | Execution core | 21-stage pipeline (fixed stage numbers) | frozen kernel K₀ + harness H of 𝒦-typed components |
 | Input/output | `AgentTurnExecutor().run(host, **kwargs)` | **identical** — chunks, usage, and model requests (measured by deterministic replay) |
-| Providers | 15 registered provider names (incl. aliases) | **same** (reuses the runtime's provider layer) |
+| Providers | 15 registered provider names (incl. aliases) | **same** (the copied provider layer `xgen_rsi.base.llm_client`) |
 | Harness improvement | people measure and edit | **RRSI**: propose → leakage screening → evaluate → accept by noise floor and cost rule |
 | Exploration | one path at a time | branch × attempt grid; the exploration policy π_E improves by **Dream-RSI** |
 | Unit of measurement | turn logs | trajectory record (discovery tree) + policy tokens c(τ) — directly a replay world |
-| How to use | `AgentTurnExecutor().run(host, **kwargs)` | `GenyRSITurnExecutor().run(host, **kwargs)` or `GenyRSI(...)` — the existing runtime does not know geny-rsi |
+| How to use | `AgentTurnExecutor().run(host, **kwargs)` | `GenyRSITurnExecutor().run(host, **kwargs)` or `GenyRSI(...)` |
+| Package | xgen-agent-runtime | xgen-agent-runtime-rsi — **neither depends on the other** |
 
 ```
 Agent A = (π, K₀, H, π_E)
@@ -56,13 +61,10 @@ Numbers, methods and limitations: [detailed comparison report](docs/reports/2026
 
 ### Install
 
-Wheels are published as GitHub Release assets (the same way as xgen-agent-runtime; not on PyPI).
+Wheels are published as GitHub Release assets (not on PyPI). This one package is all you need; xgen-agent-runtime is not required.
 
 ```bash
-pip install \
-  "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.2.0/xgen_agent_runtime_rsi-0.2.0-py3-none-any.whl" \
-  "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl" \
-  "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl"
+pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.3.0/xgen_agent_runtime_rsi-0.3.0-py3-none-any.whl"
 ```
 
 ### As a library — the same feel as `PipelinePresets`
@@ -77,21 +79,22 @@ worker = GenyRSI.agent(provider="openai", model="gpt-6-sol", api_key="sk-...", w
 for chunk in worker.stream_sync("Read reports/ and write summary.md"):
     print(chunk, end="")
 
-baseline = GenyRSI.agent(provider="openai", model="gpt-6-sol", api_key="sk-...", engine="geny")  # same call, existing engine
+baseline = GenyRSI.agent(provider="openai", model="gpt-6-sol", api_key="sk-...", engine="geny")  # same call, the 21-stage engine (geny, copied in xgen_rsi.base)
 ```
 
 ### In a host (an XGEN server, etc.) — one entry point
 
-The existing runtime (xgen-agent-runtime) neither knows nor is modified by this package. The host imports both packages the same
-way and picks the class where it runs a turn; both entry points share the same contract (`run(host, **kwargs)` → an iterator of
-text chunks, or the final text).
+The two packages do not know each other; the host imports each one. Both entry points share the same contract (`run(host, **kwargs)`
+→ an iterator of text chunks, or the final text). The tool and memory objects a host hands to a turn are built from that agent's own
+package (an Agent Geny RSI turn gets `xgen_rsi.base`'s `Tool`, `ToolRegistry` and memory providers); one turn never mixes objects
+from the two packages.
 
 | XGEN node | Runtime | Package | Entry point |
 |---|---|---|---|
 | Agent Geny (`agents/geny`) | geny | xgen-agent-runtime | `AgentTurnExecutor` |
 | Agent Geny RSI (`agents/geny-rsi`) | geny-rsi | xgen-agent-runtime-rsi | `GenyRSITurnExecutor` |
 
-XGEN's Agent Geny RSI node inherits the Agent Geny node, so ports, settings and server wiring are the same; only the entry point differs.
+XGEN's Agent Geny RSI node has the same ports, settings and server wiring as Agent Geny, and its turn runs on this package from start to finish.
 
 ```python
 from xgen_agent_runtime.host.turn_executor import AgentTurnExecutor   # geny (existing)
@@ -181,9 +184,7 @@ evaluation, checked against the reference code on 1,788/1,788 random cases.
 
 ```bash
 uv venv .venv --python 3.12
-uv pip install --python .venv/bin/python -e ".[dev]" \
-  "xgen-agent-runtime @ https://github.com/PlateerLab/xgen-agent-runtime/releases/download/v4.80.0/xgen_agent_runtime-4.80.0-py3-none-any.whl" \
-  "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl"
+uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest -q        # tests (no real model calls)
 .venv/bin/python -m mypy             # rsi_math strict
 .venv/bin/ruff check src tests experiments
@@ -193,7 +194,7 @@ uv pip install --python .venv/bin/python -e ".[dev]" \
 
 - Xia et al., *RRSI: Regularized Recursive Self-Improvement of Agent Harnesses*, arXiv:2609.24972, 2026. Code: github.com/google-research/rrsi (Apache-2.0)
 - Zheng et al., *Dream-RSI: Recursive Self-Improvement through Evolving Worlds*, arXiv:2609.14858, 2026
-- PlateerLab, *xgen-agent-runtime* — geny (the 21-stage harness), the multi-provider layer and the host contract
+- PlateerLab, *xgen-agent-runtime* — geny (the 21-stage harness), the multi-provider layer and the host contract. Version 4.80.0 is copied as `xgen_rsi.base` (Apache-2.0)
 
 ## License
 

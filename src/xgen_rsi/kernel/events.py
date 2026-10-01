@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from xgen_agent_runtime.events.types import PipelineEvent
+from xgen_rsi.base.events.types import PipelineEvent
 
 logger = logging.getLogger(__name__)
 
