@@ -1,0 +1,123 @@
+{
+  "schema": "xgen-rsi-harness/1",
+  "name": "haiku-xgen-pro",
+  "description": "RRSI-adopted harness for claude-haiku-4-5 on xgen-pro (incumbent after round 0 of 5; evolution paused at round 2): bounded write-then-verify prompt block plus two conditional procedure skills. Evolve S 0.808 vs 0.826, tokens -10.6%. Held-out not yet measured. Report 2026-10-02.",
+  "enabled_kinds": [
+    "prompt",
+    "control_flow",
+    "config",
+    "output_plumbing",
+    "context_mgmt",
+    "client_tool",
+    "skill",
+    "memory"
+  ],
+  "locked": [
+    "*.params.model",
+    "*.params.provider",
+    "*.params.credentials",
+    "*.params.max_iterations"
+  ],
+  "components": [
+    {
+      "id": "prompt.system",
+      "kind": "prompt",
+      "impl": "xgen_rsi.components.prompt:SystemPromptComponent",
+      "description": "System prompt from the turn's named parts plus memory blocks, current time and turn notes. Parts can be replaced, added or reordered.",
+      "params": {
+        "part_overrides": {},
+        "part_order": [],
+        "extra_blocks": [
+          "Before ending the episode, when the request names one or more output deliverable files: (1) read each deliverable file back from disk; (2) enumerate every stated rule from the request (required fields and their exact order, row/item counts, uniqueness constraints, sort order, value format such as prefixed IDs); (3) check the file content against each rule one by one, explicitly noting any mismatch; (4) if a mismatch is found, correct the file and re-check once before finishing. Do not declare completion based on an unread or unchecked deliverable when the request specifies structural rules such as field order, counts, sorting, or exact value formats."
+        ],
+        "memory_blocks": true,
+        "datetime": true,
+        "turn_notes": true,
+        "volatile_placement": "turn_context",
+        "schema_instruction": true
+      }
+    },
+    {
+      "id": "context.standard",
+      "kind": "context_mgmt",
+      "impl": "xgen_rsi.components.context:StandardContextComponent",
+      "description": "First-iteration memory injection, cost-triggered pruning (estimated prompt > prune_over_tokens), capacity-triggered summary compaction (> window x proactive_ratio -> window x target_ratio), budget guard.",
+      "params": {
+        "prune_over_tokens": 30000,
+        "proactive_ratio": 0.8,
+        "target_ratio": 0.7,
+        "retrieval_timeout_s": 10.0,
+        "guard": true,
+        "guard_min_headroom": 4096,
+        "guard_extra": 2048
+      }
+    },
+    {
+      "id": "control.standard",
+      "kind": "control_flow",
+      "impl": "xgen_rsi.components.control:StandardControlComponent",
+      "description": "The single loop decision point: tools ran -> continue, signals, reply without tools -> complete, deliverable check before completing, repeated-failure stop, per-turn input budget.",
+      "params": {
+        "completion_review": true,
+        "repeat_stop_after": 3,
+        "turn_budget_soft": 1000000,
+        "turn_budget_hard": 3000000
+      }
+    },
+    {
+      "id": "output.parse",
+      "kind": "output_plumbing",
+      "impl": "xgen_rsi.components.output:ParseOutputComponent",
+      "description": "Response parsing (schema parser for structured output), optional completion signals, structured-output settlement.",
+      "params": {
+        "signal_detector": "regex",
+        "completion_markers": true
+      }
+    },
+    {
+      "id": "tools.exposure",
+      "kind": "client_tool",
+      "impl": "xgen_rsi.components.tools:ToolExposureComponent",
+      "description": "The tool surface of each call: exposed tools plus tools opened via ToolSearch, restoring earlier turns' tools, gate reachability. Execution is kernel-owned.",
+      "params": {
+        "restore_from_history": true,
+        "gate_reachability": true,
+        "executor": "sequential",
+        "max_concurrency": 10
+      }
+    },
+    {
+      "id": "memory.archive",
+      "kind": "memory",
+      "impl": "xgen_rsi.components.memory:ArchiveMemoryComponent",
+      "description": "Memory policy: pinned facts and relevant knowledge injection, short-term record and conversation rollup at slice end.",
+      "params": {
+        "retrieve": true,
+        "archive": true
+      }
+    },
+    {
+      "id": "skills.library",
+      "kind": "skill",
+      "impl": "xgen_rsi.components.skills:SkillLibraryComponent",
+      "description": "Library of loadable procedures for recurring wrong-method failure modes; only name+description are advertised, full procedure loads via ReadSkill when the task matches.",
+      "params": {
+        "header": "# Skills\nProcedures you can load with ReadSkill(name) when they match your task."
+      },
+      "files": {
+        "skills/manual-computation-without-execution/SKILL.md": "skills/manual-computation-without-execution/SKILL.md",
+        "skills/constraint-satisfaction-manual-solving/SKILL.md": "skills/constraint-satisfaction-manual-solving/SKILL.md"
+      }
+    },
+    {
+      "id": "config.prompt_cache",
+      "kind": "config",
+      "impl": "xgen_rsi.components.config:PromptCacheComponent",
+      "description": "Anthropic cache_control markers when the node enables prompt caching.",
+      "params": {
+        "strategy": "aggressive"
+      }
+    }
+  ],
+  "exploration_policy": null
+}

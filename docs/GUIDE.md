@@ -104,6 +104,17 @@ geny-rsi 가 읽는 호스트 설정(`host.setting`):
 - **구조 레버(𝒦_str)**: `skill`(SKILL.md 카탈로그 + `ReadSkill` 점진 공개), `client_tool`(노출·실행 정책), `memory`(기억 정책).
 - `rsi harness show [DIR]` · `rsi harness validate [DIR]` · `rsi harness diff A B`.
 
+**패키지에 든 하네스** (`src/xgen_rsi/harnesses/`, 0.5.0). 설정이 없으면 `lineages.json` 이 정책 모델로 고른다.
+
+| 정책 계열 | 하네스 | 출처 |
+|---|---|---|
+| `openai:gpt-6-luna` | `luna-xgen-pro` | xgen-pro RRSI 5라운드 채택본(보고서 2026-10-02) |
+| `openai:gpt-6-sol` | `sol-xgen-hard` | xgen-hard RRSI 6라운드 채택본, 평가에서 읽히지 않은 `memory.archive=false` 만 H0 값으로 되돌림(보고서 2026-10-01) |
+| `anthropic:claude-haiku-4-5` | `haiku-xgen-pro` | xgen-pro RRSI 0라운드 채택본, 진화 중단 상태(보고서 2026-10-02) |
+| 그 밖 | `h0` | 시작 하네스 |
+
+`rsi evolve export` 로 꺼낸 채택본을 이 디렉터리에 넣고 `lineages.json` 에 계열을 적으면 다음 릴리스부터 XGEN 의 Agent Geny RSI 가 그 하네스를 쓴다.
+
 ---
 
 ## 4. 평가

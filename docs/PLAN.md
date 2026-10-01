@@ -203,9 +203,9 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 
 ---
 
-## 4. 구현 현황 (2026-10-02, 0.4.0)
+## 4. 구현 현황 (2026-10-02, 0.5.0)
 
-검증한 것(테스트 469개, xgen-agent-runtime 이 설치되지 않은 환경):
+검증한 것(테스트 471개, xgen-agent-runtime 이 설치되지 않은 환경):
 
 - 독립 패키지: 바탕 런타임은 xgen-agent-runtime 4.80.0 사본 `xgen_rsi.base`(519 파일 중 517 바이트 동일, `COPY.json`·`tools/sync_base.py`·테스트로 검사).
 - `rsi_math`: 두 논문 수식 전부 + 정확 경계 조기 종료. 공식 RRSI 구현과의 차분 테스트, mypy strict.
@@ -215,10 +215,11 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
   가드: 측정되지 않은 편집, 환경 단정(검토자·헌법 규칙 11), 분석기 보고 강제.
 - L2 Dream: 실제 모델 사이클 — gpt-6-sol 승격(1차), luna 유지·거절(2차).
 - XGEN: Agent Geny / Agent Geny RSI 두 노드, 에이전트 단위 패키지 선택(대화·화면 API·예약 작업, workflow !2049·!2050).
+- 패키지 하네스: gpt-6-luna `luna-xgen-pro`, claude-haiku-4-5 `haiku-xgen-pro`, gpt-6-sol `sol-xgen-hard`, 그 밖 H0 — XGEN 경로 실제 턴으로 확인(luna·sol).
 
 검증하지 않은 것 / 남은 것:
 
-- **보류 분할에서 확인된 점수·비용 개선** — luna H\* 는 evolve +0.029 였지만 보류 분할에서 잡음 안이라 패키지에 넣지 않았다.
+- **보류 분할에서 확인된 점수·비용 개선** — luna H\* 는 evolve +0.029 였지만 보류 분할에서 잡음 안(적용은 했다: `luna-xgen-pro`).
 - haiku 진화 3~5 라운드·보류 분할·Dream(API 크레딧 소진으로 중단).
 - 평가 호스트에 코드 실행 도구가 없다(운영과 다름) — 샌드박스 실행을 평가에 넣는 것이 다음 과제.
 - 운영 턴 안 탐색과 Phase 8 승격 파이프라인.

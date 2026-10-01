@@ -24,9 +24,27 @@ class _Host:
 
 
 def test_default_uses_the_bundled_table_and_falls_back_to_h0():
-    path, label = ex.resolve_harness_dir(_Host(), "openai", "gpt-6-luna")
+    path, label = ex.resolve_harness_dir(_Host(), "openai", "gpt-4o-mini")
     assert path == ex.BUILTIN_H0.resolve() and label == "builtin:h0"
     assert json.loads(ex.BUILTIN_LINEAGES.read_text())["lineages"]["default"] == "h0"
+
+
+def test_bundled_rrsi_harnesses_are_applied_per_model_family():
+    """RRSI 가 채택한 하네스는 모델 계열별로 적용된다(보고서 2026-10-01·10-02)."""
+    from xgen_rsi.harness.runtime import instantiate
+    from xgen_rsi.harness.spec import load_manifest
+
+    expected = {("openai", "gpt-6-luna"): "luna-xgen-pro", ("openai", "gpt-6-sol"): "sol-xgen-hard",
+                ("anthropic", "claude-haiku-4-5-20251001"): "haiku-xgen-pro"}
+    for (provider, model), name in expected.items():
+        path, label = ex.resolve_harness_dir(_Host(), provider, model)
+        assert label == f"builtin:{name}" and path == (ex.BUILTIN_DIR / name).resolve()
+        manifest = load_manifest(path)
+        assert manifest.name == name and manifest.version_id() != load_manifest(ex.BUILTIN_H0).version_id()
+        instantiate(manifest)  # 구성요소가 실제로 선다
+    # 측정되지 않은 편집(memory.archive=false)은 운영 하네스에 싣지 않는다
+    sol = load_manifest(ex.BUILTIN_DIR / "sol-xgen-hard")
+    assert next(c for c in sol.components if c.id == "memory.archive").params["archive"] is True
 
 
 def test_builtin_name_in_the_fixed_setting():

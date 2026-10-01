@@ -35,9 +35,18 @@ agent (personal SSH connection tests, the general LLM service, …) use XGEN's d
 **When to use which**
 
 - **Agent Geny** — the default. Its harness changes only through runtime releases (edited and verified by people).
-- **Agent Geny RSI** — when you want a harness **adopted by measurement** for the chosen model. Only harnesses with a record of a
-  score gain above noise, or of lower cost at the same score, on a held-out split never used for judging enter the package. For a model with
-  no adopted harness it behaves like Agent Geny. **As of 2026-10-02 no adopted harness is bundled** — see [results](#results).
+- **Agent Geny RSI** — when you want the chosen model to run on **the harness RRSI adopted** for it. The latest adopted harness of each
+  model family's lineage is bundled; models not in the lineage table run H0 (the same behaviour as Agent Geny). The evidence for each adoption
+  and the held-out result are recorded with it.
+
+**Adopted harnesses bundled now** (`harnesses/lineages.json`)
+
+| Model | Harness | What changed (vs H0) | Measured (reports) |
+|---|---|---|---|
+| gpt-6-luna | `luna-xgen-pro` | a table-export procedure skill (account for every source row, check the written row count), old-tool-output pruning threshold 30,000 → 36,000 tokens | evolve 0.919 → 0.948. Held-out k=4: 0.911 vs H0 0.907 vs geny 0.916 (within noise), tokens +26% |
+| claude-haiku-4-5 | `haiku-xgen-pro` | a write-then-read-back format check block (once), two conditional procedure skills (worksheet and constraint propagation when no code-execution tool is listed) | evolve 0.808 vs 0.826 (within band), tokens −10.6%. Evolution paused at round 2/5, held-out not yet measured |
+| gpt-6-sol | `sol-xgen-hard` | two general procedure blocks, tool-output pruning threshold 30,000 → 24,000 tokens (the memory-archive-off edit never read in evaluation is reverted to the H0 value) | xgen-hard held-out k=4: 1.000 vs H0 0.997 (within noise), tokens +5% |
+| others | `h0` | — | the same behaviour as Agent Geny (replay equivalence) |
 
 ---
 
@@ -80,8 +89,9 @@ per model. Instead of people re-tuning a harness for each model, only changes th
   edit budget) and the edit is measured on a business suite. A score rise **above the noise floor (δ)** is adopted subject to the cost
   rule; within the band, an edit is adopted only when the combined score, cost and novelty value (Eq.17) is positive — edits that only add cost
   are rejected. Edits the evaluation never read and edits asserting facts about the environment are rejected. Adoptions form a harness lineage
-  per model family, and every judgement input is recorded so a round can be re-adjudicated. **Shipping (the package) is a separate bar** — only
-  harnesses whose gain is confirmed on a held-out split never used for judging are bundled.
+  per model family, and every judgement input is recorded so a round can be re-adjudicated. The lineage's latest adopted harness ships as
+  that model family's bundled harness, together with its result on a held-out split never used for judging — and when no gain was confirmed,
+  that is stated.
 - **Dream-RSI saves exploration compute.** Accumulated exploration records serve as replay worlds, so candidate exploration policies
   (how many branches, when to stop) are compared without new generation. A replay winner is promoted only after **exploring live again
   and passing the RRSI judgement**.
@@ -117,8 +127,8 @@ Agent A = (π, K₀, H, π_E)
 | Question | Result (measured) |
 |---|---|
 | Does swapping in lose anything? | Before evolution geny-rsi (H0) is within noise of the existing runtime for both models and splits (luna 0.919 vs 0.906, haiku 0.826 vs 0.810, evolve) |
-| Does the score rise? (RRSI) | luna: 2 adoptions in 5 rounds, evolve 0.919 → 0.948 (above δ 0.025). But **on the held-out split (k=4): H\* 0.911 vs H0 0.907 vs geny 0.916 — within noise**, tokens +26% → not bundled |
-| Does cost fall? (RRSI) | haiku: an edit with −10.6% tokens at the same score level adopted (−45.8% in a voided run). Evolution stopped at round 2/5 when the API credit ran out — to be updated after resuming |
+| Does the score rise? (RRSI) | luna: 2 adoptions in 5 rounds, evolve 0.919 → 0.948 (above δ 0.025). But **on the held-out split (k=4): H\* 0.911 vs H0 0.907 vs geny 0.916 — within noise**, tokens +26%. The adopted harness is applied as `luna-xgen-pro` |
+| Does cost fall? (RRSI) | haiku: an edit with −10.6% tokens at the same score level adopted (−45.8% in a voided run), applied as `haiku-xgen-pro`. Evolution stopped at round 2/5 when the API credit ran out — to be updated after resuming |
 | Do measurement and guards work? | 7/10 cost-only candidates rejected automatically (luna). Three defects found and blocked in the runs: an empty analysis, **edits hard-coding the evaluation environment** (false in production), outage trials recorded as zero |
 | Is exploration saved? (Dream-RSI) | the luna exploration policy developed by gpt-6-sol: same best score with −36% attempts, but tokens +0.16% → the confirmation blocked the promotion |
 
@@ -126,9 +136,10 @@ Agent A = (π, K₀, H, π_E)
 both engines send byte-identical requests (81/81, 77/77). Both models sit at the ceiling (0.9–1.0), so no harness improvement could be shown.
 gpt-6-sol's Dream policy was promoted with 25% fewer attempts and 16% fewer tokens.
 
-**In short:** what geny-rsi reliably does today is **swap in without loss and keep only the changes measurement allows**. No score or cost gain has
-yet been confirmed on a held-out split. The biggest limitations are that the evaluation host has no code-execution tool (unlike production) and the
-small held-out split (8 tasks).
+**In short:** Agent Geny RSI runs the RRSI-adopted harness for the measured model families (luna, haiku, sol). What has been shown so far is
+**swapping in without loss and keeping only the changes measurement allows**, plus gains on the evolve set (luna's score, haiku's cost). No score or
+cost gain has yet been confirmed on a held-out split. The biggest limitations are that the evaluation host has no code-execution tool (unlike
+production) and the small held-out split (8 tasks).
 
 ---
 
@@ -139,7 +150,7 @@ small held-out split (8 tasks).
 Wheels are published as GitHub Release assets (not on PyPI). This one package is all you need; xgen-agent-runtime is not required.
 
 ```bash
-pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.4.0/xgen_agent_runtime_rsi-0.4.0-py3-none-any.whl"
+pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.5.0/xgen_agent_runtime_rsi-0.5.0-py3-none-any.whl"
 ```
 
 ### As a library — the same feel as `PipelinePresets`

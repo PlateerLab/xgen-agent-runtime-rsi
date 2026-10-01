@@ -10,7 +10,7 @@
   both splits (luna 0.919 vs 0.906, haiku 0.826 vs 0.810 — evolve, k=2).
 - **luna: RRSI raised the evolve score, but it did not carry over to the held-out split.** Two adoptions in five rounds, evolve 0.919 → 0.948.
   On the held-out split never used for judging (k=4), H\* 0.911 vs H0 0.907 vs geny 0.916 — within noise, with 26% more tokens than H0.
-  **So it is not bundled.**
+  H\* is bundled and applied as `luna-xgen-pro`.
 - **haiku: edits that cut cost at the same score level appeared.** The edit adopted in round 0 cut tokens by 10.6% with the score inside the
   band (−0.018). A voided earlier run also produced an edit with the same score and −45.8% tokens (§6, voided for an environment assertion).
   The haiku evolution **stopped in round 2 when the API credit ran out**; it will be updated after it resumes.
@@ -18,9 +18,11 @@
   blocked during the runs — an empty analysis, edits that hard-code the evaluation environment, and missing trials recorded during a credit outage (§8).
 - **Dream-RSI: a policy with 36% fewer exploration attempts was found but not promoted, since cost did not fall.** The luna exploration policy
   developed by gpt-6-sol found the same best score with 72 → 46 attempts, but policy tokens were +0.16%, and the confirmation judgement rejected it.
-- **Bottom line:** today Agent Geny RSI runs H0 (= the same behaviour as Agent Geny) for every model. What geny-rsi achieved "more strongly" is not
-  yet **score** but **measured change control** — rejecting losing changes automatically, recording the evidence for each adoption, blocking
-  edits that would harm production — plus cost-saving candidates for haiku.
+- **Applied:** the RRSI-adopted harnesses are bundled per model family — gpt-6-luna `luna-xgen-pro`, claude-haiku-4-5 `haiku-xgen-pro`, gpt-6-sol
+  `sol-xgen-hard`. XGEN's Agent Geny RSI runs those harnesses for these models (checked with real-model turns on the XGEN path, §9).
+- **Bottom line:** what geny-rsi achieved "more strongly" is not yet a held-out **score** but **measured change control** — rejecting losing
+  changes automatically, recording the evidence for each adoption, blocking edits that would harm production — plus gains on the evolve set
+  (luna's score, haiku's cost).
 
 ---
 
@@ -133,8 +135,8 @@ Paired per-task differences (task means): H\*−H0 +0.018 ±0.036, H\*−geny �
 ledger (+0.19) and audit (+0.13) and below on schedule (−0.15) — with one task per category, a single task's success swings the mean.
 
 **Interpretation.** The evolve gain of +0.029 did not carry over to the held-out split, and cost rose. A likely reason: both adoptions came in through the
-within-band rule (a gain inside the noise plus cost and novelty terms) — neither edit cleared δ on its own. So this H\* is **not bundled** (the README's
-bar: a gain above noise, or lower cost at the same score, confirmed on the held-out split).
+within-band rule (a gain inside the noise plus cost and novelty terms) — neither edit cleared δ on its own. H\* is applied as `luna-xgen-pro`, the
+lineage's latest adopted harness, and this held-out result (no confirmed gain, tokens +26%) is recorded with it.
 
 ## 7. Experiment 4 — Dream-RSI exploration policy (gpt-6-luna)
 
@@ -171,7 +173,11 @@ The defect fixed earlier (adopting an unmeasured edit → the read-parameter gua
 | Change control | automatic rejection of cost-only candidates (luna 7/10), every judgement input recorded, harmful edits (unmeasured, environment assertions) blocked | — |
 | Exploration | a policy reaching the same best score with −36% attempts | token savings — rejected by the confirmation |
 
-**Production state:** no adopted harness is bundled yet. In XGEN, Agent Geny RSI runs H0 for every model, which behaves like Agent Geny.
+**Production state:** bundled adopted harnesses (`harnesses/lineages.json`) — gpt-6-luna `luna-xgen-pro`, claude-haiku-4-5 `haiku-xgen-pro` (the
+current harness at round 2/5), gpt-6-sol `sol-xgen-hard` (first round; the unmeasured memory-archive edit reverted to the H0 value). Other models run
+H0. Real-model turns on the XGEN path (star executor, server host) confirmed it in the trajectory records — gpt-6-luna: all 3 turns `luna-xgen-pro`
+(sha256:9ad5a6af…), gpt-6-sol: all 3 turns `sol-xgen-hard` (sha256:259d77c8…), with 0 xgen-agent-runtime import attempts in the same turns. haiku
+could not run a real turn (credit); that the lineage table maps `claude-haiku-4-5-20251001` to `haiku-xgen-pro` is covered by a test.
 
 ## 10. Limitations
 

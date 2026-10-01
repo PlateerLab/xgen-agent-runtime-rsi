@@ -9,7 +9,7 @@
 - **It swaps in.** Replaying real responses, geny-rsi H0 sends byte-identical requests to geny (sonnet-5 81/81, gpt-6-sol 77/77). Score and token differences are model sampling variance.
 - **These two models cannot show an improvement.** gpt-6-sol scores 0.99–1.0 even on xgen-hard, and sonnet-5 is perfect on xgen-core. The harness RRSI adopted for gpt-6-sol (H\*) scores 1.000 on the held-out split, the same as H0's 0.997 within noise, and uses 5% more tokens.
 - **Dream-RSI found the same best score with less exploration.** An exploration policy developed by gpt-6-sol was promoted after a live check with −25% attempts and −16% tokens.
-- **Real runs exposed a defect.** An edit the evaluation never read (turning off memory archiving) was adopted through the novelty bonus. 0.2.0 blocks it with a guard, and that harness is not bundled (§8).
+- **Real runs exposed a defect.** An edit the evaluation never read (turning off memory archiving) was adopted through the novelty bonus. 0.2.0 blocks it with a guard, and the production harness (`sol-xgen-hard`) reverts that edit to the H0 value (§8).
 - The next measurements use models below the ceiling (gpt-6-luna, claude-haiku-4-5) and a harder suite.
 
 ---
@@ -146,7 +146,7 @@ Held-out split (8 tasks × k4, never used for judging):
 | geny-rsi H0 | 0.9972 ±0.004 | 9,309 | 13.4 |
 | geny-rsi H\* | 1.0000 | 9,812 | 14.0 |
 
-- H\*'s score gain is within noise and it uses 5.4% more tokens than H0. One of its three changed addresses (`memory.archive`) is an unmeasured edit, so this H\* is not bundled.
+- H\*'s score gain is within noise and it uses 5.4% more tokens than H0. One of its three changed addresses (`memory.archive`) is an unmeasured edit, so the bundled harness `sol-xgen-hard` reverts only that item to the H0 value (it was never read in evaluation, so the measured behaviour is the same).
 
 **claude-sonnet-5** — started with the same settings; no adoption in r0, stopped during r1 (decided to redo with models below the ceiling).
 Held-out k4 comparison of H0: geny 0.8125 ±0.119, geny-rsi H0 0.8636 ±0.087. The gap comes from two tasks, order aggregation (0/4 vs 1/4 successes) and the survey pipeline (0.54 vs 0.71), and is within the standard error.
@@ -181,7 +181,7 @@ These defects surfaced in the pre-release code review (a read-only audit) and wh
 | A relative run directory from the CLI resolved against the harness repo inside git worktree | **a real evolution run** (baseline step) | the run directory is made absolute |
 | The prompt component could not take plain strings in `extra_blocks`, breaking the turn | **a real evolution run** (both gpt-6-sol round-0 candidates failed smoke) | accepts strings and `{"id","text"}` objects; that round was voided and re-run from the same analysis (§6) |
 | Glob's result order varied between runs, so requests diverged even with the same responses | first attempt of experiment 2 | fixed seed-file modification times |
-| **An edit the evaluation never read was adopted.** gpt-6-sol r3A turned off `memory.archive.params.archive`. The evaluation runs with memory off, so that value is never read and ΔS −0.0019 · ΔC +1.6% are noise, yet the novelty bonus (ν=1) carried it over the within-band rule. Used in production with memory on, this harness would stop conversation archiving (an unmeasured change) | review of a **real evolution run** | components record the parameter addresses they read in the trajectory record; a candidate that edits a parameter no trial of its evaluation read is rejected by a domain guard (0.2.0). The gpt-6-sol H\* from before this fix contains that edit and is not bundled |
+| **An edit the evaluation never read was adopted.** gpt-6-sol r3A turned off `memory.archive.params.archive`. The evaluation runs with memory off, so that value is never read and ΔS −0.0019 · ΔC +1.6% are noise, yet the novelty bonus (ν=1) carried it over the within-band rule. Used in production with memory on, this harness would stop conversation archiving (an unmeasured change) | review of a **real evolution run** | components record the parameter addresses they read in the trajectory record; a candidate that edits a parameter no trial of its evaluation read is rejected by a domain guard (0.2.0). The gpt-6-sol H\* from before this fix contains that edit; the bundled harness `sol-xgen-hard` reverts only that item to the H0 value |
 
 ---
 
