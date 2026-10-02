@@ -5,6 +5,26 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml/badge.svg)](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml)
 
+> [!IMPORTANT]
+> **geny-rsi is built on the two papers below.** The rules for improving a harness by measurement come from **RRSI**; the idea of using
+> completed runs as a replay simulator, so alternatives are evaluated without new runs, comes from **Dream-RSI**. We translated both papers'
+> formulas and procedures into code ([design 33, Korean](docs/design/33-formula-to-code.md)), and differential tests show the same results as
+> the official RRSI implementation. The methodology in this repository is the research of these papers' authors.
+>
+> **[1] RRSI: Regularized Recursive Self-Improvement of Agent Harnesses** — arXiv:2609.24972 · [PDF](https://arxiv.org/pdf/2609.24972)
+> - Authors: Peng Xia, Rujun Han, Zifeng Wang, Yanfei Chen, Yufan Zhuang, Yoonho Lee, Chengsong Huang, Han Yu, Zhongying CuiZhu, Yifei Ming, Huaxiu Yao, Burak Gokturk, Tomas Pfister, Chen-Yu Lee
+> - Affiliations: Google Cloud AI Research · UNC-Chapel Hill · Stanford University · Washington University in St. Louis
+> - Code: [google-research/rrsi](https://github.com/google-research/rrsi) (Apache-2.0) · [regularized-rsi.com](https://regularized-rsi.com)
+> - What we took: the harness as editable components; proposal-side regularization (annealed edit budget, credit assignment over the whole history, exploration of untried components on a stall); selection-side regularization (leakage screening, noise-adjusted floor, cost rule, in-band rule, structural pruning, domain guards).
+>
+> **[2] Dream-RSI: Recursive Self-Improvement through Evolving Worlds** — arXiv:2609.14858v1 · [PDF](https://arxiv.org/pdf/2609.14858v1)
+> - Authors: Tong Zheng, Xidong Wu, Zheng Zhang, Zhankui He, Chaoyi Zhang, Benjamin Coleman, Ruoqiao Wei, Di Bai, Haolin Liu, Rui Liu, Xue Wang, Yue Zhuan, Wang-Cheng Kang, Renkai Xiang, Heng Huang, Xinwu Cheng, Yunsong Guo
+> - Affiliations: Google · University of Maryland, College Park · Google DeepMind · University of Virginia
+> - Code: [zhengkid/Dream-RSI](https://github.com/zhengkid/Dream-RSI) · [dream-rsi.com](https://dream-rsi.com)
+> - What we took: completed runs as a replay simulator (worlds), deterministic evaluation of alternatives on the record, selection that includes the current policy, the policy fixed within a run, and the loop redeploy → new records → a larger simulator. geny-rsi uses it both for the exploration policy on verifiable tasks and for consolidating the harness after every agent turn.
+>
+> To cite, use the BibTeX in [References](#references).
+
 **geny-rsi** is XGEN's second agent runtime. In XGEN it is used as **Agent Geny RSI** (`agents/geny-rsi`).
 
 - **Geny base** — it carries a copy of the element layer of the existing runtime geny (xgen-agent-runtime). Providers, tools, memory, tasks,
@@ -430,13 +450,13 @@ the unit from "21 numbered stages" to **kinds of edit units (𝒦)**. The eviden
 worse and cost drops", "structure over requests", "intervene only on deterministic signals") were **RRSI done by hand**. Permissions, HITL, user
 denials and the sandbox are owned by the kernel and cannot be turned off by the harness.
 
-**2. RRSI** — *Regularized Recursive Self-Improvement of Agent Harnesses* ([arXiv:2609.24972](https://arxiv.org/abs/2609.24972)). It keeps the edit
+**2. RRSI** — *Regularized Recursive Self-Improvement of Agent Harnesses* ([arXiv:2609.24972](https://arxiv.org/pdf/2609.24972)). It keeps the edit
 space open and **regularizes the search trajectory**. On the proposal side: an annealed edit budget (Eq.4), credit assignment over the full history
 (Eq.10/11), exploring untried components when stalled (Eq.13). On the selection side: leakage review, a noise-calibrated floor (Eq.5), the cost
 rule on gains (Eq.7), the within-band rule (Eq.17), structural pruning (Eq.14) and domain guards. It produces **the same results as the official
 implementation** (google-research/rrsi, Apache-2.0), checked by differential tests.
 
-**3. Dream-RSI** — *Recursive Self-Improvement through Evolving Worlds* ([arXiv:2609.14858](https://arxiv.org/abs/2609.14858)). Accumulated
+**3. Dream-RSI** — *Recursive Self-Improvement through Evolving Worlds* ([arXiv:2609.14858v1](https://arxiv.org/pdf/2609.14858v1)). Accumulated
 discovery history is the **replay world**. Exploration-policy candidates are replayed deterministically over recorded trees (no new generation),
 compared by Eq.1 and chosen by argmax including the incumbent. geny-rsi promotes a replay winner only after it explores for real and **passes the
 RRSI judgement once more**.
@@ -520,8 +540,30 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 ## References
 
-- Xia et al., *RRSI: Regularized Recursive Self-Improvement of Agent Harnesses*, arXiv:2609.24972, 2026. Code: github.com/google-research/rrsi (Apache-2.0)
-- Zheng et al., *Dream-RSI: Recursive Self-Improvement through Evolving Worlds*, arXiv:2609.14858, 2026
+- **[1]** Peng Xia, Rujun Han, Zifeng Wang, Yanfei Chen, Yufan Zhuang, Yoonho Lee, Chengsong Huang, Han Yu, Zhongying CuiZhu, Yifei Ming, Huaxiu Yao, Burak Gokturk, Tomas Pfister, Chen-Yu Lee. *RRSI: Regularized Recursive Self-Improvement of Agent Harnesses*. arXiv:2609.24972, 2026. [PDF](https://arxiv.org/pdf/2609.24972)
+- **[2]** Tong Zheng, Xidong Wu, Zheng Zhang, Zhankui He, Chaoyi Zhang, Benjamin Coleman, Ruoqiao Wei, Di Bai, Haolin Liu, Rui Liu, Xue Wang, Yue Zhuan, Wang-Cheng Kang, Renkai Xiang, Heng Huang, Xinwu Cheng, Yunsong Guo. *Dream-RSI: Recursive Self-Improvement through Evolving Worlds*. arXiv:2609.14858v1, 2026. [PDF](https://arxiv.org/pdf/2609.14858v1)
+
+```bibtex
+@article{xia2026rrsi,
+  title   = {RRSI: Regularized Recursive Self-Improvement of Agent Harnesses},
+  author  = {Xia, Peng and Han, Rujun and Wang, Zifeng and Chen, Yanfei and Zhuang, Yufan and Lee, Yoonho and Huang, Chengsong and
+             Yu, Han and CuiZhu, Zhongying and Ming, Yifei and Yao, Huaxiu and Gokturk, Burak and Pfister, Tomas and Lee, Chen-Yu},
+  journal = {arXiv preprint arXiv:2609.24972},
+  year    = {2026},
+  url     = {https://arxiv.org/pdf/2609.24972}
+}
+
+@article{zheng2026dreamrsi,
+  title   = {Dream-RSI: Recursive Self-Improvement through Evolving Worlds},
+  author  = {Zheng, Tong and Wu, Xidong and Zhang, Zheng and He, Zhankui and Zhang, Chaoyi and Coleman, Benjamin and Wei, Ruoqiao and
+             Bai, Di and Liu, Haolin and Liu, Rui and Wang, Xue and Zhuan, Yue and Kang, Wang-Cheng and Xiang, Renkai and Huang, Heng and
+             Cheng, Xinwu and Guo, Yunsong},
+  journal = {arXiv preprint arXiv:2609.14858},
+  year    = {2026},
+  url     = {https://arxiv.org/pdf/2609.14858v1}
+}
+```
+
 - PlateerLab, *xgen-agent-runtime* — geny (the 21-stage harness), the multi-provider layer and the host contract. Version 4.81.0 is copied as `xgen_rsi.base` (Apache-2.0)
 
 ## License

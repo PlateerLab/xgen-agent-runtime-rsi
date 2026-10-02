@@ -5,6 +5,25 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml/badge.svg)](https://github.com/PlateerLab/xgen-agent-runtime-rsi/actions/workflows/ci.yml)
 
+> [!IMPORTANT]
+> **geny-rsi 는 아래 두 논문을 바탕으로 만들었다.** 하네스를 측정으로 고치는 규칙은 **RRSI** 에서, 실행 기록을 재생 시뮬레이터로 써서 대안을
+> 새 실행 없이 평가하는 방식은 **Dream-RSI** 에서 가져왔다. 두 논문의 수식과 절차를 코드로 옮겼고([설계 33](docs/design/33-formula-to-code.md)),
+> RRSI 공식 구현과는 차분 테스트로 같은 결과를 낸다. 이 저장소의 방법론은 두 논문 저자들의 연구다.
+>
+> **[1] RRSI: Regularized Recursive Self-Improvement of Agent Harnesses** — arXiv:2609.24972 · [PDF](https://arxiv.org/pdf/2609.24972)
+> - 저자: Peng Xia, Rujun Han, Zifeng Wang, Yanfei Chen, Yufan Zhuang, Yoonho Lee, Chengsong Huang, Han Yu, Zhongying CuiZhu, Yifei Ming, Huaxiu Yao, Burak Gokturk, Tomas Pfister, Chen-Yu Lee
+> - 소속: Google Cloud AI Research · UNC-Chapel Hill · Stanford University · Washington University in St. Louis
+> - 코드: [google-research/rrsi](https://github.com/google-research/rrsi) (Apache-2.0) · [regularized-rsi.com](https://regularized-rsi.com)
+> - 가져온 것: 하네스 = 편집 가능한 구성요소, 제안 쪽 정규화(담금질 편집 예산 · 전체 이력 신용 할당 · 정체 시 미시도 구성요소 탐색), 선택 쪽 정규화(누설 심사 · 잡음 보정 바닥 · 비용 규칙 · 띠 안 규칙 · 구조 가지치기 · 도메인 가드).
+>
+> **[2] Dream-RSI: Recursive Self-Improvement through Evolving Worlds** — arXiv:2609.14858v1 · [PDF](https://arxiv.org/pdf/2609.14858v1)
+> - 저자: Tong Zheng, Xidong Wu, Zheng Zhang, Zhankui He, Chaoyi Zhang, Benjamin Coleman, Ruoqiao Wei, Di Bai, Haolin Liu, Rui Liu, Xue Wang, Yue Zhuan, Wang-Cheng Kang, Renkai Xiang, Heng Huang, Xinwu Cheng, Yunsong Guo
+> - 소속: Google · University of Maryland, College Park · Google DeepMind · University of Virginia
+> - 코드: [zhengkid/Dream-RSI](https://github.com/zhengkid/Dream-RSI) · [dream-rsi.com](https://dream-rsi.com)
+> - 가져온 것: 완료된 실행 기록 = 재생 시뮬레이터(world), 기록 위에서 대안을 결정적으로 평가, 현재 정책을 포함한 선택, 실행 중 정책 고정, 재배치 → 새 기록 → 시뮬레이터가 커지는 순환. geny-rsi 는 이를 검증기 있는 탐색 정책과, 에이전트 턴마다의 하네스 정리 둘 다에 쓴다.
+>
+> 인용은 [참고문헌](#참고문헌)의 BibTeX 를 쓴다.
+
 **geny-rsi** 는 XGEN 의 두 번째 에이전트 런타임이다. XGEN 에서는 **Agent Geny RSI**(`agents/geny-rsi`)로 쓴다.
 
 - **Geny 기본** — 기존 런타임 geny(xgen-agent-runtime)의 요소 계층을 그대로 복사해 가진다. 공급자·도구·기억·작업·앱·스토리지·자기 진화·
@@ -408,12 +427,12 @@ rsi dream cycle runs/cycle1 --worlds worlds.json --incumbent builtin:parallel_re
 "부탁보다 구조", "결정론 신호가 있을 때만 끼어든다")은 **RRSI 를 손으로 하던 것**이다. 권한·HITL·사용자 거부·샌드박스는 하네스가 끌 수 없는
 커널 소유다.
 
-**2. RRSI** — *Regularized Recursive Self-Improvement of Agent Harnesses* ([arXiv:2609.24972](https://arxiv.org/abs/2609.24972)).
+**2. RRSI** — *Regularized Recursive Self-Improvement of Agent Harnesses* ([arXiv:2609.24972](https://arxiv.org/pdf/2609.24972)).
 편집 공간은 열어 두고 **탐색 궤적을 정규화**한다. 제안 쪽은 담금질 편집 예산(Eq.4)·전체 이력 신용 할당(Eq.10/11)·정체 시 미시도 구성요소
 탐색(Eq.13), 선택 쪽은 누설 심사·잡음 보정 바닥(Eq.5)·이득 시 비용 규칙(Eq.7)·띠 안 규칙(Eq.17)·구조 가지치기(Eq.14)·도메인 가드.
 공식 구현(google-research/rrsi, Apache-2.0)과 **차분 테스트로 같은 결과**를 낸다.
 
-**3. Dream-RSI** — *Recursive Self-Improvement through Evolving Worlds* ([arXiv:2609.14858](https://arxiv.org/abs/2609.14858)).
+**3. Dream-RSI** — *Recursive Self-Improvement through Evolving Worlds* ([arXiv:2609.14858v1](https://arxiv.org/pdf/2609.14858v1)).
 쌓인 발견 이력이 곧 **재생 world** 다. 탐색 정책 후보를 기록된 트리 위에서 결정적으로 재생해(새 생성 없음) Eq.1 로 비교하고 현재 정책을
 포함한 argmax 로 고른다. geny-rsi 는 재생 승자를 실제로 다시 탐색해 **RRSI 판정을 한 번 더 통과해야** 승격한다.
 
@@ -494,8 +513,30 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 ## 참고문헌
 
-- Xia et al., *RRSI: Regularized Recursive Self-Improvement of Agent Harnesses*, arXiv:2609.24972, 2026. 코드: github.com/google-research/rrsi (Apache-2.0)
-- Zheng et al., *Dream-RSI: Recursive Self-Improvement through Evolving Worlds*, arXiv:2609.14858, 2026
+- **[1]** Peng Xia, Rujun Han, Zifeng Wang, Yanfei Chen, Yufan Zhuang, Yoonho Lee, Chengsong Huang, Han Yu, Zhongying CuiZhu, Yifei Ming, Huaxiu Yao, Burak Gokturk, Tomas Pfister, Chen-Yu Lee. *RRSI: Regularized Recursive Self-Improvement of Agent Harnesses*. arXiv:2609.24972, 2026. [PDF](https://arxiv.org/pdf/2609.24972)
+- **[2]** Tong Zheng, Xidong Wu, Zheng Zhang, Zhankui He, Chaoyi Zhang, Benjamin Coleman, Ruoqiao Wei, Di Bai, Haolin Liu, Rui Liu, Xue Wang, Yue Zhuan, Wang-Cheng Kang, Renkai Xiang, Heng Huang, Xinwu Cheng, Yunsong Guo. *Dream-RSI: Recursive Self-Improvement through Evolving Worlds*. arXiv:2609.14858v1, 2026. [PDF](https://arxiv.org/pdf/2609.14858v1)
+
+```bibtex
+@article{xia2026rrsi,
+  title   = {RRSI: Regularized Recursive Self-Improvement of Agent Harnesses},
+  author  = {Xia, Peng and Han, Rujun and Wang, Zifeng and Chen, Yanfei and Zhuang, Yufan and Lee, Yoonho and Huang, Chengsong and
+             Yu, Han and CuiZhu, Zhongying and Ming, Yifei and Yao, Huaxiu and Gokturk, Burak and Pfister, Tomas and Lee, Chen-Yu},
+  journal = {arXiv preprint arXiv:2609.24972},
+  year    = {2026},
+  url     = {https://arxiv.org/pdf/2609.24972}
+}
+
+@article{zheng2026dreamrsi,
+  title   = {Dream-RSI: Recursive Self-Improvement through Evolving Worlds},
+  author  = {Zheng, Tong and Wu, Xidong and Zhang, Zheng and He, Zhankui and Zhang, Chaoyi and Coleman, Benjamin and Wei, Ruoqiao and
+             Bai, Di and Liu, Haolin and Liu, Rui and Wang, Xue and Zhuan, Yue and Kang, Wang-Cheng and Xiang, Renkai and Huang, Heng and
+             Cheng, Xinwu and Guo, Yunsong},
+  journal = {arXiv preprint arXiv:2609.14858},
+  year    = {2026},
+  url     = {https://arxiv.org/pdf/2609.14858v1}
+}
+```
+
 - PlateerLab, *xgen-agent-runtime* — geny(21-stage 하네스), 다중 공급자 계층, 호스트 계약. 4.81.0 을 `xgen_rsi.base` 로 복사해 쓴다(Apache-2.0)
 
 ## 라이선스
