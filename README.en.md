@@ -88,8 +88,8 @@ user ──turn──► Agent Geny RSI ── kernel + [this agent's current ha
 |---|---|---|
 | 1 | Ship H0 only, fix parity defects between the two runtimes, pin in XGEN | 0.6.0 · workflow !2056 |
 | 2 | Agent harness and trajectory host hooks, criteria checks, usage records → tasks, agent evolution API ([GUIDE §2-1, Korean](docs/GUIDE.md)) | 0.7.0 |
-| 3 | XGEN storage, hooks, feedback → tasks, evolution worker, API | in progress |
-| 4 | [Harness] tab in the Agent Geny RSI detail view | in progress |
+| 3 | XGEN storage, hooks, feedback → tasks, evolution worker, API | workflow !2058 · core !915 (awaiting merge) |
+| 4 | [Harness] tab in the Agent Geny RSI detail view — difference from H0, evolution material, start/stop/auto evolution, roll back | frontend !2768 (awaiting merge) |
 
 An administrator can pin every agent to one harness with `XGEN_RSI_HARNESS_DIR` (a directory path or `builtin:h0`).
 

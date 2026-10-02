@@ -105,8 +105,8 @@ RSI 의 강점은 사용자 fit 이다. 같은 모델이라도 에이전트마�
 |---|---|---|---|
 | 1 | rsi · workflow | 패키지를 H0 만으로(실험 하네스 제거), 두 런타임 동일성 결함 수정, XGEN 핀 | rsi 0.6.0 · workflow !2056 |
 | 2 | rsi | 호스트 훅(`rsi_agent_harness`, `rsi_record`), 기준 판정 검사(`answer_criteria`)와 판정 모델(`CriteriaJudge`), 사용 기록 → 과제(`xgen_rsi.usage`), 에이전트 진화 실행 API(`xgen_rsi.agent_evolution`) | rsi 0.7.0 |
-| 3 | workflow | 에이전트별 하네스·궤적·진화 실행 저장, 훅 구현, 피드백·기대 답 → 과제, 진화 작업자, [하네스] API | 진행 중 |
-| 4 | frontend | Agent Geny RSI 상세 [하네스] 탭 | 진행 중 |
+| 3 | workflow · core | 에이전트별 하네스·궤적·진화 실행 저장(core 테이블 4개), 훅 구현, 피드백·기대 답 → 과제, 진화 작업자, [하네스] API | workflow !2058 · core !915 |
+| 4 | frontend | Agent Geny RSI 상세 [하네스] 탭 | frontend !2768 |
 
 2단계 API 는 [GUIDE](../GUIDE.md) §2-1. 사용 기록 → 과제 → RRSI → 채택 → 다음 턴이 그 하네스로 도는 것까지 각본 모델로 끝까지 테스트한다
 (`tests/test_agent_evolution.py`).
