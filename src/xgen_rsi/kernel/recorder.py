@@ -66,6 +66,8 @@ class TrajectoryRecord:
     final_text: Optional[str] = None
     transcript: Optional[List[Dict[str, Any]]] = None
     verifier: Optional[Dict[str, Any]] = None
+    #: 턴 세계(설계 41, :mod:`xgen_rsi.kernel.capture`) — 호스트가 ``XGEN_RSI_RECORD_WORLD`` 를 켰을 때만
+    world: Optional[Dict[str, Any]] = None
 
     def to_json(self) -> Dict[str, Any]:
         return asdict(self)
@@ -164,6 +166,7 @@ class TrajectoryRecorder:
         error: Optional[str] = None,
         transcript: Optional[List[Dict[str, Any]]] = None,
         params_read: Optional[List[str]] = None,
+        world: Optional[Dict[str, Any]] = None,
     ) -> TrajectoryRecord:
         rec = self.record
         rec.status = status
@@ -174,6 +177,7 @@ class TrajectoryRecorder:
         rec.components_fired = dict(components_fired or {})
         rec.params_read = sorted(params_read or [])
         rec.final_text_chars = len(final_text or "")
+        rec.world = world
         if self._keep_content:
             rec.final_text = final_text
             rec.transcript = transcript

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime-rsi"
-version = "0.7.0"
+version = "0.8.0"
 description = "XGEN RSI harness — a swap-in agent harness that evolves itself with RRSI (regularized harness evolution) and Dream-RSI (replay-based exploration policy improvement)"
 readme = "README.md"
 license = "Apache-2.0"
@@ -70,7 +70,7 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/xgen_rsi"]
-artifacts = ["src/xgen_rsi/harnesses/**/*.md", "src/xgen_rsi/harnesses/**/*.json", "src/xgen_rsi/evolve/constitution/**/*.md", "src/xgen_rsi/suites/**/*.json"]
+artifacts = ["src/xgen_rsi/harnesses/**/*.md", "src/xgen_rsi/harnesses/**/*.json", "src/xgen_rsi/evolve/constitution/**/*.md", "src/xgen_rsi/consolidate/constitution/**/*.md", "src/xgen_rsi/suites/**/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

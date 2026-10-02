@@ -31,6 +31,7 @@
 |---|---|---|---|
 | — | [PLAN.md](PLAN.md) | 결정 항목 + Phase 0–9 계획·종료 기준 | 196줄 |
 | 40 | [design/40-agent-self-evolution.md](design/40-agent-self-evolution.md) | **운영 구조**: 에이전트마다 H0 에서 시작해 XGEN 사용 기록으로 자기 하네스 진화 | — |
+| 41 | [design/41-turn-consolidation.md](design/41-turn-consolidation.md) | **턴 정리**: 두 논문의 갱신 시점(실행 사이), 턴 세계·재생(Dream-RSI)·다음 메시지 신호, 턴마다 RRSI 라운드, 다음 턴 적용 | — |
 | **논문·코드** | | | |
 | 01 | [research/01-rrsi-paper.md](research/01-rrsi-paper.md) | RRSI 요약·분석: 문제·방법·Eq.1–17·Algorithm 1·2·Table 5·실험·사례 재검산 | 258줄 |
 | 02 | [research/02-rrsi-reference-code.md](research/02-rrsi-reference-code.md) | 공식 구현 분석, 역할 프롬프트, 구조 기질, 헌법, **논문-코드 차이 D1–D18** | 317줄 |

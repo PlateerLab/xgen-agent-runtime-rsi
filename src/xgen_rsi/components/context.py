@@ -128,6 +128,12 @@ class StandardContextComponent(Component):
         except asyncio.TimeoutError:
             rt.emit("context.retrieval_timeout", {"timeout_s": timeout})
             return
+        capture = getattr(rt, "capture", None)
+        if capture is not None:
+            try:
+                capture.on_memory(chunks)
+            except Exception:  # noqa: BLE001 — 세계 기록이 턴을 깨지 않는다
+                logger.debug("world capture of memory failed", exc_info=True)
         if not chunks:
             return
         seen = {ref.get("key") for ref in state.memory_refs}

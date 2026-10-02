@@ -16,6 +16,8 @@
 * ``XGEN_RSI_RECORD_DIR`` — 궤적 기록을 파일로 남길 위치
 * 호스트의 선택 훅 ``rsi_record(record)`` — 궤적 요약을 호스트가 받는다(에이전트별 사용 기록). 기록 디렉터리와 함께 쓸 수 있다
 * ``XGEN_RSI_RECORD_CONTENT`` — 기록에 전사·최종 글까지 남김(평가 실행용, 운영 기본 끔)
+* ``XGEN_RSI_RECORD_WORLD`` — 턴 세계(설계 41: 모델이 본 입력·도구 결과·기억 검색 결과)를 기록의 ``world`` 로 남김.
+  호스트의 턴 정리가 재생에 쓴다. 루프를 소유하는 CLI 공급자는 재생할 수 없어 기록하지 않는다
 * ``XGEN_RSI_HARNESS_CACHE`` — 에이전트 하네스 페이로드를 풀어 둘 디렉터리(없으면 임시 디렉터리)
 """
 
@@ -31,6 +33,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from xgen_rsi.harness.runtime import LoadedHarness, TurnRuntime, instantiate
 from xgen_rsi.harness.spec import HarnessManifest, HarnessSpecError, LineageTable, load_manifest
+from xgen_rsi.kernel.capture import WorldCapture
 from xgen_rsi.kernel.engine import TurnEngine
 from xgen_rsi.kernel.events import EventHub
 from xgen_rsi.kernel.ledger import LedgerClient, UsageLedger
@@ -143,6 +146,7 @@ class PreparedTurn:
     provider_label: str
     plan: Any
     _rollout: Any = None
+    capture: Optional[WorldCapture] = None
 
     # ── rollout(관리자 옵트인, 기존 형식) ─────────────────────────────────
     def open_rollout(self, loop: Any) -> None:
@@ -209,6 +213,16 @@ class PreparedTurn:
 
                 summary = harness_summary(state) or {}
                 keep = getattr(self.recorder, "_keep_content", False)
+                world = None
+                if self.capture is not None:
+                    try:
+                        world = self.capture.finish(
+                            state=state, final_text=output_text, status=str(state.run_status),
+                            termination_reason=str(state.termination_reason or ""),
+                            policy_tokens=int(self.ledger.policy_tokens()), steps=dict(self.recorder.record.steps),
+                        )
+                    except Exception:  # noqa: BLE001 — 세계 기록이 턴을 깨지 않는다
+                        logger.warning("rsi: world capture failed", exc_info=True)
                 self.recorder.finish(
                     status=str(state.run_status),
                     termination_reason=str(state.termination_reason or ""),
@@ -218,10 +232,14 @@ class PreparedTurn:
                     error=error or None,
                     transcript=list(state.messages) if keep else None,
                     params_read=self.rt.harness.params_read(),
+                    world=world,
                 )
             except Exception:  # noqa: BLE001
                 logger.warning("rsi: trajectory finish failed", exc_info=True)
         provider = self.plan.memory_provider
+        if provider is not None and getattr(type(provider), "rsi_replay", False) is True:
+            # 재생(설계 41) — 기억에 쓰지도, 실행 기록을 남기지도, 증류하지도 않는다.
+            provider = None
         if unfinished and provider is not None:
             from types import SimpleNamespace
 
@@ -405,6 +423,11 @@ class RSITurnExecutor:
                     if registry.get(tool.name) is None:
                         registry.register(tool, core=True)
 
+        capture: Optional[WorldCapture] = None
+        if recorder is not None and not plan.is_cli and _truthy(_setting(host, "XGEN_RSI_RECORD_WORLD")):
+            capture = WorldCapture()
+            rt.capture = capture
+
         tools: Optional[ToolRunner] = None
         if not plan.is_cli and registry is not None and len(registry):
             from xgen_rsi.base.host.runner import ensure_surface_entrances
@@ -417,7 +440,19 @@ class RSITurnExecutor:
                 result_filter=plan.result_filter,
                 executor=str(tool_policy.param("executor", "sequential")) if tool_policy is not None else "sequential",
                 max_concurrency=int(tool_policy.param("max_concurrency", 10)) if tool_policy is not None else 10,
+                capture=capture,
             )
+        if capture is not None:
+            try:
+                capture.on_prepare(plan, registry=registry, contributed=[t.name for t in contributed],
+                                   harness_version=version, lineage=lineage,
+                                   provider=str(getattr(client, "provider", "") or plan.provider))
+            except Exception:  # noqa: BLE001 — 세계 기록이 턴을 깨지 않는다
+                logger.warning("rsi: world capture failed at prepare", exc_info=True)
+                capture = None
+                rt.capture = None
+                if tools is not None:
+                    tools.capture = None
         rt.tool_context_provider = (lambda: tools.context) if tools is not None else (lambda: plan.run_tool_context)
 
         caller = ModelCaller(lclient, stream=bool(kw.get("stream", True)))
@@ -431,6 +466,7 @@ class RSITurnExecutor:
             recorder=recorder,
             provider_label=str(getattr(client, "provider", "") or ""),
             plan=plan,
+            capture=capture,
         )
 
     def execute(self, prepared: PreparedTurn, plan: Any, host: Any) -> Any:

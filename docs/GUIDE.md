@@ -86,38 +86,47 @@ geny-rsi 가 쓰는 호스트 훅(선택 — 없으면 그 기능만 꺼진다):
 
 ---
 
-## 2-1. 에이전트 진화 — 호스트가 에이전트마다 부르는 API
+## 2-1. 턴 정리 — 호스트가 턴마다 부르는 API
 
-설계: [설계 40](design/40-agent-self-evolution.md). 에이전트의 사용 기록을 과제로 만들고, 그 에이전트의 현재 하네스에서 RRSI 를 돌려 채택된
-하네스를 돌려준다. 채택은 RRSI 가 정한다(이 API 는 판정을 바꾸지 않는다).
+설계: [설계 41](design/41-turn-consolidation.md). 턴이 끝나면 호스트가 그 에이전트의 세계들로 정리를 부른다. 채택은 RRSI 가 정한다(이 API 는
+판정을 바꾸지 않는다).
+
+**1) 세계를 남긴다.** 호스트 설정 `XGEN_RSI_RECORD_WORLD=1` 이면 궤적 요약(`rsi_record(record)`)에 `record["world"]` 가 붙는다 — 모델이 본 입력
+(시스템 조각·앞 대화·입력·기억 검색 결과)과 도구 호출마다 실제 결과, 그 턴의 답. 자격증명·객체는 들어가지 않고 이미지는 자리 표시가 된다.
+크기 상한(2MB)을 넘으면 `replayable=False` 로 남는다. 루프를 소유하는 CLI 공급자 턴은 세계를 남기지 않는다.
+
+**2) 턴이 끝나면 정리한다.**
 
 ```python
-from xgen_rsi.agent_evolution import AgentEvolution
+from xgen_rsi.consolidate import Consolidator, ConsolidationState, TurnWorld
 from xgen_rsi.evolve.runner import PolicySpec
 from xgen_rsi.roles.llm import RoleModel
-from xgen_rsi.usage import AgentSettings, UsageItem
 
-usage = [UsageItem(id="io-123", request="...", answer="...", history=[...],
-                   stars=1, issue="데이터 오류", comment="...", expected="", criteria=[])]
-evo = AgentEvolution(work_dir, policy=PolicySpec(provider="openai", model="gpt-6-sol", api_key=key),
-                     roles={r: RoleModel(provider=..., model=..., api_key=...) for r in
-                            ("proposer", "critic", "analyst", "digester", "judge")},
-                     agent=AgentSettings(system_prompt=node_system_prompt), T=3, k=2)
-result = evo.run(usage, current=agent_current_payload_or_None)
-if result.adopted:
-    store(result.payload)      # 다음 턴부터 rsi_agent_harness() 가 이것을 돌려준다
+worlds = [TurnWorld(id="io-123", data=record["world"], signals={"stars": 1, "comment": "...", "expected": ""},
+                    interaction_id="i-1", seq=3), ...]                     # 그 에이전트의 최근 세계들(최근 것부터 수십 개)
+cons = Consolidator(policy=PolicySpec(provider="openai", model="gpt-6-luna", api_key=key),
+                    roles={r: RoleModel(provider=..., model=..., api_key=...) for r in ("proposer", "critic", "analyst", "judge")})
+res = cons.consolidate(ConsolidationState.from_json(saved_state), worlds, agent_current_payload_or_None,
+                       latest="io-123",           # 방금 끝난 턴 — 그 사용자 메시지로 같은 대화의 앞 턴 답을 판정한다
+                       fresh=["io-99"])           # 그 사이 피드백·기대 답이 바뀐 세계
+save_state(res.state.to_json())                   # 편집 이력·라운드 번호·재생 캐시 — 다음 정리가 이어 쓴다
+save_signals(res.signals)                         # 새로 읽은 다음 메시지 신호
+if res.adopted:
+    store(res.payload)                            # 다음 턴부터 rsi_agent_harness() 가 이것을 돌려준다
 ```
 
 | 단계 | 모듈 | 하는 일 |
 |---|---|---|
-| 과제 | `xgen_rsi.usage` | 기대 답 → "기대 답과 내용이 같다", 낮은 별점·이슈 → "보고된 문제가 없어야 한다", 높은 별점 → "받아들여진 답의 요점을 지킨다", 사용자 기준 그대로. 신호 없는 턴은 빠진다. 해시로 evolve/heldout |
-| 판정 | `answer_criteria` 검사 + `xgen_rsi.evolve.judge.CriteriaJudge` | 판정 모델이 답이 기준을 만족하는지 본다. 하네스 밖(하네스는 기준을 보지 못한다). 같은 답은 한 번만 묻는다 |
-| 진화 | `xgen_rsi.agent_evolution.AgentEvolution` | 기준선 2회 → δ → RRSI 라운드(가드 그대로) → 채택 페이로드 + 라운드별 판정 + heldout 측정(시작 vs 채택) |
+| 세계 | `xgen_rsi.kernel.capture` · `consolidate.world` | 턴 하나의 입력·도구 결과·기억 검색·결과 |
+| 재생 | `consolidate.replay.replay_world` | 후보 하네스로 같은 턴을 다시 조립해 돈다. 도구는 기록된 결과, 기록 밖 호출은 "기록된 결과 없음", 기억에 쓰지 않는다 |
+| 신호 | `consolidate.signals` | 다음 사용자 메시지 → 정정·불만(기준 하나)·수용(회귀 기준)·중립. 별점·이슈·코멘트·기대 답은 `xgen_rsi.usage` 와 같은 기준 |
+| 정리 | `consolidate.Consolidator` | 고칠 신호가 있으면 RRSI 라운드 하나: 지금 하네스 재생 → δ → 분석 → 후보(제안·검토·태그·적재) → 후보 재생(조기 종료) → 선택 |
 
-- 평가는 과제마다 독립 작업 공간에서 `AgentSettings.toolset`(기본 파일 도구)으로 돈다 — 사용자의 기억·파일·외부 시스템을 건드리지 않는다.
-- 자격증명은 객체로만 받고 디스크에 쓰지 않는다. `work_dir` 하나가 실행 하나이고, 같은 디렉터리로 다시 부르면 이어서 돈다. `evo.stop()` 은
-  다음 라운드 전에 멈춘다.
-- 과제가 모자라면(`min_evolve`, 기본 4) `status="not_enough_usage"` 로 끝난다.
+- 결과 `status`: `recorded`(라운드 없음 — 신호가 없거나 확인뿐), `kept`(라운드 결과 유지 또는 이미 통과), `adopted`, `failed`(지금 하네스 재생 실패).
+- 기본값: 후보 2, 세계당 시행 2, 평가 세계 8, b_t 3→1(T 20), n_prune 4 — `ConsolidationParams`.
+- 자격증명은 객체로만 받고 디스크에 쓰지 않는다. 임시 디렉터리 밖에 남는 것은 돌려주는 상태와 페이로드뿐이다.
+
+오프라인으로 사용 기록 전체를 과제로 만들어 진화시키는 `xgen_rsi.agent_evolution.AgentEvolution`(0.7.0)도 남아 있다(실험·재현용).
 
 ---
 

@@ -36,7 +36,9 @@ class ToolRunner:
         result_filter: Any = None,
         executor: str = "sequential",
         max_concurrency: int = 10,
+        capture: Any = None,
     ) -> None:
+        self.capture = capture
         executor_cls = _EXECUTORS.get(executor, SequentialExecutor)
         self._stage = ToolStage(
             registry=registry,
@@ -66,6 +68,11 @@ class ToolRunner:
             {"count": len(tool_calls), "tools": [tc.get("tool_name", "") for tc in tool_calls]},
         )
         results = await self._stage.dispatch_calls(list(tool_calls), state)
+        if self.capture is not None:
+            try:
+                self.capture.on_tool_results(tool_calls, results)
+            except Exception:  # noqa: BLE001 — 세계 기록이 턴을 깨지 않는다
+                pass
         state.add_message("user", results)
         state.tool_results = results
         state.shared["executor.tool_calls_total"] = int(state.shared.get("executor.tool_calls_total", 0)) + len(

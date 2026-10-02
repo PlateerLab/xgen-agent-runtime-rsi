@@ -15,6 +15,12 @@ from xgen_rsi.harness.runtime import Component
 logger = logging.getLogger(__name__)
 
 
+def is_replay(provider: Any) -> bool:
+    """재생 기억 자리(:class:`xgen_rsi.consolidate.replay.ReplayMemoryProvider`)인가 — 클래스 속성으로만 본다
+    (속성을 무엇이든 돌려주는 기억 객체가 재생으로 오인되지 않게)."""
+    return provider is not None and getattr(type(provider), "rsi_replay", False) is True
+
+
 class ArchiveMemoryComponent(Component):
     """Memory policy (the memory *contents* are user data and never part of the harness).
 
@@ -34,6 +40,8 @@ class ArchiveMemoryComponent(Component):
     def retriever(self, rt: Any) -> Any:
         if rt.memory_provider is None or not self.param("retrieve", True):
             return None
+        if is_replay(rt.memory_provider):  # 재생(설계 41): 기록된 검색 결과를 돌려준다
+            return rt.memory_provider.rsi_retriever()
         if self._retriever is None:
             from xgen_rsi.base.memory.retriever import MemoryAwareRetriever
 
@@ -42,6 +50,8 @@ class ArchiveMemoryComponent(Component):
 
     async def on_slice_end(self, rt: Any) -> None:
         if rt.memory_provider is None or not self.param("archive", True):
+            return
+        if is_replay(rt.memory_provider):  # 재생은 기억에 쓰지 않는다
             return
         if self._strategy is None:
             from xgen_rsi.base.host.conversation_archive import ConversationArchivingStrategy

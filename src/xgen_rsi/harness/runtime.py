@@ -141,6 +141,8 @@ class TurnRuntime:
     #: 에이전트 설정(입력 x)의 명시 값 — 하네스 기본값보다 우선한다(설계 30 문서 P3).
     agent_settings: Mapping[str, Any] = field(default_factory=dict)
     scratch: Dict[str, Any] = field(default_factory=dict)
+    #: 턴 세계 기록기(:class:`~xgen_rsi.kernel.capture.WorldCapture`) — 호스트가 켰을 때만. 구성요소는 기억 검색 결과만 알린다.
+    capture: Any = None
 
     @property
     def iteration(self) -> int:

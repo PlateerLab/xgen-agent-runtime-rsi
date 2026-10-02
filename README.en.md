@@ -10,15 +10,17 @@
 - **Geny base** — it carries a copy of the element layer of the existing runtime geny (xgen-agent-runtime). Providers, tools, memory, tasks,
   apps, storage, self-evolution and the host contract are the same as Agent Geny. It is an independent package: it neither imports nor depends
   on xgen-agent-runtime.
-- **RRSI** — it splits the harness pipeline that runs one turn into a fixed kernel and an editable harness, and evolves the harness by
-  measurement. **Every Agent Geny RSI starts from the default of the RSI pipeline (H0) and evolves its own harness from how its users use it
-  (conversations, feedback, expected answers).**
-- **Dream-RSI** — in exploration that tries several attempts at a task with a verifier, it evolves the exploration policy (how many branches,
-  when to stop) by replaying recorded history.
+- **RRSI** — it splits the harness pipeline that runs one turn into a fixed kernel and an editable harness, and improves the harness by
+  regularized measurement. **Every Agent Geny RSI starts from the default of the RSI pipeline (H0).**
+- **Dream-RSI** — a completed run is a replay simulator. **Every turn of the agent is kept as a replay world** (what the model saw plus the real
+  results its tools returned), and harness candidates are measured on those worlds without running the tools again.
+- **Turn consolidation** — the moment a turn ends, a consolidation runs. It takes the correction or complaint in the user's next message, ratings,
+  comments and expected answers as signals; when there is something to fix it runs one RRSI round by replay, and the adopted harness is used from
+  **the very next turn** ([design 41, Korean](docs/design/41-turn-consolidation.md)).
 
 The two agents differ in **one thing: the harness pipeline**. RSI's strength is fitting the user. Even with the same model, each agent has its own
-work, users and material, so the right harness differs too. The package therefore ships H0 only, and the harness evolves per agent inside XGEN
-([design 40, Korean](docs/design/40-agent-self-evolution.md)). The methodology experiments and the implementation review of the two runtimes are
+work, users and material, so the right harness differs too. The package therefore ships H0 only, and the harness is improved per agent inside
+XGEN from its users' turns. The methodology experiments and the implementation review of the two runtimes are
 in one [**comparison report (Korean)**](docs/reports/geny-vs-geny-rsi.md).
 
 [한국어](README.md) · [**Comparison report (Korean)**](docs/reports/geny-vs-geny-rsi.md) · [Usage guide (Korean)](docs/GUIDE.md) · [Design docs (Korean)](docs/README.md) · [Plan (Korean)](docs/PLAN.md)
@@ -58,38 +60,45 @@ tests, the general LLM service, and so on) use XGEN's default package (runtime).
 
 ---
 
-## Each agent has its own harness — self-evolution inside XGEN
+## A consolidation after every turn — self-evolution inside XGEN
 
 ```
-user ──turn──► Agent Geny RSI ── kernel + [this agent's current harness H_t] ──► answer     H0 at first
-                    │ trajectory summary (harness version, termination, tools, cost)
-                    ▼
-               [usage records] ◄── feedback (stars, issue, comment) · expected answers (quality evaluation) · tasks added by hand
-                    ▼ turned into tasks with judgement criteria
-               [this agent's tasks] evolve / heldout
-                    ▼ evolution run (started by the user, or when tasks accumulate)
-               RRSI rounds: analyse → propose → review → evaluate → judge (δ, cost rule, guards)
-                    ▼ adopt
-               [this agent's harness lineage] H0 → H1 → …          H_{t+1} from the next turn, roll back at any time
+turn N   user ──► Agent Geny RSI ── kernel + [this agent's current harness H_t] ──► answer      H_t is fixed within the turn
+            │ turn world: what the model saw (system parts, earlier conversation, input, memory retrieval) + every tool call's real result
+            ▼
+         [consolidation] — as soon as the turn ends, in the background
+            1 signal  what this user message says about the previous answer (correction, complaint, acceptance) + ratings, comments, expected answers
+            2 measure replay the worlds that carry signals with the current harness — tool results from the record, only the model runs again
+            3 round   if there is something to fix, one RRSI round: analyse → propose (b_t, history, exploration, pruning) → leakage review
+                      → replay the candidates → judge (δ, cost rule, guards)
+            ▼ adopt
+turn N+1 [this agent's harness lineage] H0 → H1 → …      each turn reads the current harness when it starts; roll back at any time
 ```
 
-- **The harness belongs to the agent.** The package ships H0 only. It does not ship harnesses fitted to a model or a suite; harnesses evolved in
-  experiments are fitted to those experiment suites and are not used in production.
-- **The material is that agent's use.** The turn records XGEN already keeps (`execution_io`), user feedback (`user_feedbacks`) and expected answers
-  (quality evaluation) become tasks. Judgement uses deterministic checks and criteria judged by a judge model (`answer_criteria`). Judgement sits
-  outside the harness.
-- **Evaluation does not touch the user's data or external systems.** Each task runs in its own workspace with that agent's settings, and tools with
-  side effects are blocked.
-- **One agent's evolution applies only to that agent.** Clones and frozen copies take the harness lineage with them.
+Both papers update **between runs** — RRSI every round, Dream-RSI after every online run ("The policy code stays fixed throughout the rollout").
+For an agent one online run is one turn, so the consolidation runs between turns and the conversation (Interaction) does not change.
 
-**Implementation status** ([design 40](docs/design/40-agent-self-evolution.md) §4)
+- **World = that turn's real environment.** Replay rebuilds the same turn with the candidate harness and answers each tool call with the result
+  that came back in that turn. A call that was never made gets "no recorded result" (Dream-RSI's Child = ∅). No tool runs again, so there are no
+  side effects, no external access, and it is fast.
+- **Signal = that user.** A judge model reads the user's next message and writes what a better answer must satisfy. Ratings, issues, comments and
+  expected answers become criteria the same way. The judge and the criteria sit outside the harness.
+- **Judgement = RRSI as is.** Noise floor, cost rule, in-band rule, unread-edit guard, leakage review. The edit history and the round counter
+  continue across consolidations per agent (evidence-aware credit, the pruning window, the annealed edit budget).
+- **Fast.** With nothing to fix, a consolidation only records. A round reuses the turns recorded under the current harness as trials, caches
+  replays per harness version, replays candidates in parallel and stops early on the exact bound. With a real model (gpt-6-luna), from a
+  correction signal to an adoption took about 50 seconds (2 candidates, 1 world).
+- **The harness belongs to the agent.** The package ships H0 only. One agent's consolidation applies only to that agent; clones and frozen copies
+  take the lineage with them.
+
+**Implementation status** ([design 41, Korean](docs/design/41-turn-consolidation.md))
 
 | Stage | Content | Status |
 |---|---|---|
-| 1 | Ship H0 only, fix parity defects between the two runtimes, pin in XGEN | 0.6.0 · workflow !2056 |
-| 2 | Agent harness and trajectory host hooks, criteria checks, usage records → tasks, agent evolution API ([GUIDE §2-1, Korean](docs/GUIDE.md)) | 0.7.0 |
-| 3 | XGEN storage, hooks, feedback → tasks, evolution worker, API | workflow !2058 · core !915 (awaiting merge) |
-| 4 | [Harness] tab in the Agent Geny RSI detail view — difference from H0, evolution material, start/stop/auto evolution, roll back | frontend !2768 (awaiting merge) |
+| 1 | Ship H0 only, fix parity defects between the two runtimes | 0.6.0 |
+| 2 | Agent harness and trajectory host hooks, criteria checks | 0.7.0 |
+| 3 | Turn world recording (`XGEN_RSI_RECORD_WORLD`), world replay, next-message signals, turn consolidation API (`xgen_rsi.consolidate`) | 0.8.0 |
+| 4 | XGEN — consolidation at the end of each turn, world and state storage, consolidation log in the [Harness] tab | workflow · core · frontend MRs |
 
 An administrator can pin every agent to one harness with `XGEN_RSI_HARNESS_DIR` (a directory path or `builtin:h0`).
 
@@ -111,26 +120,29 @@ The kernel fixes the order of a turn (`context → prompt → client_tool → gu
 decide what each step does. Components come in 9 𝒦 kinds — `prompt`, `context_mgmt`, `control_flow`, `output_plumbing`, `client_tool`, `skill`,
 `memory`, `config` (and `subagent`, disabled) — and a harness is a content-addressed package (`manifest.json`) of their parameters and files.
 
-RRSI improves the harness in rounds.
+RRSI improves the harness in rounds. In production the turn consolidation opens a round (when a new signal says something needs fixing).
 
-1. An analyst turns failing trajectories into failure modes.
-2. A proposer makes harness edits within an edit budget. A critic screens for leakage, environment assertions and kernel intrusion.
-3. The candidates are measured. If the score rises above the noise floor δ the cost rule decides; inside the band an edit is adopted only if
-   `100·ΔS − 15·ΔC + 0.5·ν > 0`. An edit to a parameter that was never read during evaluation is rejected by a guard.
-4. Adoptions form that agent's harness lineage (H0 → H1 → …), and every decision input is recorded so it can be judged again. The next turn runs on
-   the adopted harness.
+1. An analyst turns the trajectories of the worlds the current harness fails into failure modes.
+2. A proposer makes harness edits within the edit budget b_t (it sees the agent's continuing edit history, exploration directives and pruning
+   targets). A critic screens for leakage (conversation content), environment assertions and kernel intrusion.
+3. The same worlds are replayed with each candidate. If the score rises above the noise floor δ the cost rule decides; inside the band an edit is
+   adopted only if `100·ΔS − 15·ΔC + 0.5·ν > 0`. An edit to a parameter that was never read during the replays is rejected by a guard.
+4. Adoptions form that agent's harness lineage (H0 → H1 → …) and every decision input is recorded. The very next turn runs on the adopted harness.
 
-The material is that agent's use — turn inputs and outputs, user feedback (stars, issue, comment), expected answers (quality evaluation). These
-become tasks with judgement criteria, split into evolve and heldout ([design 40](docs/design/40-agent-self-evolution.md) §2.3).
+The same formulas also run offline evolution on a business suite (`rsi evolve`, the methodology experiments).
 
-### 3. Dream-RSI — saving exploration compute
+### 3. Dream-RSI — the record is the simulator
 
-A task with a verifier can be tried several ways (`rsi dream explore`: a branch × attempt grid). The exploration policy π_E decides how many
-branches to open and when to stop. Recorded exploration trees become replay worlds, and π_E candidates are compared by replay without new
-generation, using Eq.1 `V = max s − β1·N + β2·N/max(1,k★)`. A replay winner is promoted only after it explores the same tasks for real and passes
-the **RRSI judgement (floor + cost rule)**. The evaluation trials that an agent's evolution runs leave behind are that agent's replay worlds.
+Dream-RSI's core is "a completed run, used as a replay simulator, lets you evaluate alternative policies immediately without expensive online runs".
 
-Production conversation turns have no verifier to score them, so they do not use π_E and run a single path.
+- **In turn consolidation (production)** — one turn of the agent is one online run, and its world joins the simulator (𝓗_t = 𝓗_{t−1} ∪ {𝒯_t}).
+  Harness candidates are measured by replaying those worlds (tool results from the record, actions outside it get ∅). The adopted harness is
+  redeployed on the next turn, and that turn becomes a world again. Following §5.1 (history used as directional guidance narrows exploration),
+  the critic rejects edits that put conversation summaries or lessons into the harness.
+- **In exploration with a verifier (offline)** — when a task is tried several ways (`rsi dream explore`: a branch × attempt grid) the exploration
+  policy π_E decides how many branches to open and when to stop. Recorded exploration trees are replayed to compare π_E candidates with Eq.1
+  `V = max s − β1·N + β2·N/max(1,k★)`, and a replay winner must explore again for real and pass the **RRSI judgement (floor + cost rule)** to be
+  promoted. Production conversation turns do not open branching exploration (there is no verifier).
 
 ---
 
@@ -330,6 +342,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 - [Comparison report (Korean)](docs/reports/geny-vs-geny-rsi.md) — implementation review of the two runtimes, swap equivalence, RRSI and Dream-RSI methodology experiments, production use, limits
 - [Design 40 — each agent has its own harness (Korean)](docs/design/40-agent-self-evolution.md) — self-evolution inside XGEN (the production structure)
+- [Design 41 — turn consolidation (Korean)](docs/design/41-turn-consolidation.md) — Dream-RSI × RRSI after every turn: when the papers update, worlds, replay, signals, next-turn application
 - [Usage guide (Korean)](docs/GUIDE.md) — library API, server settings, harness format, evaluation, evolution and exploration commands, updating the copy
 - [Design docs map (Korean)](docs/README.md) — paper analysis, formula reference, runtime survey, fusion principles, architecture, I/O compatibility, evaluation, risks
 - [Plan (Korean)](docs/PLAN.md) — stage plan, decisions, implementation status
