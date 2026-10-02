@@ -60,47 +60,218 @@ tests, the general LLM service, and so on) use XGEN's default package (runtime).
 
 ---
 
-## A consolidation after every turn — self-evolution inside XGEN
+## How Agent Geny RSI runs inside XGEN
+
+In one sentence: **a turn runs on the current harness; when it ends the turn is kept as a replay record (a world); right away a consolidation
+replays that agent's worlds and decides whether to change the harness; the changed harness is read when the next turn starts.** There is no
+button or switch. Rationale: [design 41 (Korean)](docs/design/41-turn-consolidation.md).
 
 ```
-turn N   user ──► Agent Geny RSI ── kernel + [this agent's current harness H_t] ──► answer      H_t is fixed within the turn
-            │ turn world: what the model saw (system parts, earlier conversation, input, memory retrieval) + every tool call's real result
-            ▼
-         [consolidation] — as soon as the turn ends, in the background
-            1 signal  what this user message says about the previous answer (correction, complaint, acceptance) + ratings, comments, expected answers
-            2 measure replay the worlds that carry signals with the current harness — tool results from the record, only the model runs again
-            3 round   if there is something to fix, one RRSI round: analyse → propose (b_t, history, exploration, pruning) → leakage review
-                      → replay the candidates → judge (δ, cost rule, guards)
-            ▼ adopt
-turn N+1 [this agent's harness lineage] H0 → H1 → …      each turn reads the current harness when it starts; roll back at any time
+turn N   ┌ pick harness   read the current version from the DB (H0 if none); fixed until this turn ends
+         ├ run            kernel + harness; what the model saw and what the tools returned are recorded as they were
+         └ turn end       trajectory summary + world stored → start that agent's consolidation in the background (the turn does not wait)
+[consol] ┌ signal         does the user's next message in the conversation correct or accept the previous answer + ratings, expected answers
+         ├ decide         no new signal that asks for a fix → record only and stop
+         ├ measure        replay the worlds that carry signals with the current harness (tools from the record, only the model runs again)
+         ├ round          2 candidate harnesses → replay the same worlds → RRSI judgement
+         └ adopt          put the new version in the lineage and make it current
+turn N+1 pick harness reads the new version
 ```
 
-Both papers update **between runs** — RRSI every round, Dream-RSI after every online run ("The policy code stays fixed throughout the rollout").
-For an agent one online run is one turn, so the consolidation runs between turns and the conversation (Interaction) does not change.
+**Timeline example** — a correction is only known from the next turn's message, so the changed harness is used from the turn after the correcting one.
 
-- **World = that turn's real environment.** Replay rebuilds the same turn with the candidate harness and answers each tool call with the result
-  that came back in that turn. A call that was never made gets "no recorded result" (Dream-RSI's Child = ∅). No tool runs again, so there are no
-  side effects, no external access, and it is fast.
-- **Signal = that user.** A judge model reads the user's next message and writes what a better answer must satisfy. Ratings, issues, comments and
-  expected answers become criteria the same way. The judge and the criteria sit outside the harness.
-- **Judgement = RRSI as is.** Noise floor, cost rule, in-band rule, unread-edit guard, leakage review. The edit history and the round counter
-  continue across consolidations per agent (evidence-aware credit, the pruning window, the annealed edit budget).
-- **Fast.** With nothing to fix, a consolidation only records. A round reuses the turns recorded under the current harness as trials, caches
-  replays per harness version, replays candidates in parallel and stops early on the exact bound. With a real model (gpt-6-luna), from a
-  correction signal to an adoption took about 50 seconds (2 candidates, 1 world).
-- **The harness belongs to the agent.** The package ships H0 only. One agent's consolidation applies only to that agent; clones and frozen copies
-  take the lineage with them.
+| Turn | User | Harness of this turn | Consolidation after the turn |
+|---|---|---|---|
+| 1 | "Compare the three plans" | H0 | no signal → record only |
+| 2 | "No, show it as a table, one-line recommendation" | H0 | turn 2's message judges turn 1's answer = correction → round → H1 adopted |
+| 3 | (any request) | **H1** | … |
 
-**Implementation status** ([design 41, Korean](docs/design/41-turn-consolidation.md))
+### What changes
+
+**Only that agent's harness changes.** Harness = `manifest.json` + the files its components reference (skill documents etc.). The version is the
+`sha256` of the canonical manifest and the referenced files (same content, same version).
+
+| Can change | Examples |
+|---|---|
+| Component parameters | `prompt.system.params.extra_blocks` (add an instruction block), `part_overrides` (replace a stock block), compaction thresholds, completion review and repeat-stop, tool exposure, memory policy (retrieve / archive on or off) |
+| Component files | write a `skills/<name>/SKILL.md` procedure and list it under a component |
+| Enable, disable, add, remove components | registered implementations only (no code can be added) |
+
+| Never changes | Why |
+|---|---|
+| The kernel — execution order, tool execution, permissions, user denials, sandbox, usage ledger, limits | outside the harness, so the harness cannot touch measurement or safety |
+| Locked values — `model`, `provider`, `credentials`, `max_iterations`; the manifest's `locked`, `enabled_kinds`, `exploration_policy` | a proposal that edits them is rejected |
+| Agent settings — the node's system prompt, tools, model | input chosen by the user; the harness must work generally on top of it |
+| Memory contents (the memory vault), conversation history | user data; consolidation never writes memory |
+| The judge and the criteria | outside the harness; the harness never sees criteria while it runs |
+| The package's H0 | the starting point of every agent; an agent's changes accumulate in that agent's lineage only |
+
+### When it changes
+
+- **Only three things change it:** an adoption by a consolidation, a rollback by the user, and making a clone or a frozen copy (which copies the
+  original's lineage and current version).
+- **It applies when the next turn starts.** When a turn is prepared the host hook `rsi_agent_harness()` reads the current version. The pod where
+  the adoption happened sees it at once; other pods within 15 seconds (the version cache lifetime).
+- **It never changes within a turn.** A turn that started before the consolidation finished runs to the end on the previous version; the turn
+  after it uses the new one. Continuation slices of the same turn use the same harness.
+- **The conversation (Interaction) does not change.** The earlier messages stay as they are; only the system side of the next turn is built by
+  the new harness.
+
+### One consolidation — the exact order
+
+A consolidation starts after every turn, but the expensive steps run only when their condition holds. `status` is kept in the consolidation log
+(`geny_rsi_runs`).
+
+| Step | What it does | Ends here when (status) |
+|---|---|---|
+| 0. Preconditions | it must be an Agent Geny RSI and not a frozen copy; if another pod is consolidating this agent (a `running` record younger than 15 min) it skips | no record |
+| 1. Models | policy π = the agent's model; roles (proposer, critic, analyst, judge) = the same model with the key registered in XGEN | Claude Code / Codex → `skipped` |
+| 2. Worlds, explicit signals | read the latest 60 worlds; re-read each turn's rating and expected answer from XGEN, update the stored signals when they differ and mark them **fresh** | no worlds → no record |
+| 3. Implicit signals | read up to 4 (previous turn, next turn) pairs whose previous answer has no judgement yet, the just-finished turn first. The judge classifies the next message as `correction`, `complaint`, `accept` or `neutral`, and for a correction or complaint writes one sentence "what a better answer must satisfy". A pair is read once | — |
+| 4. Criteria | signals → criteria (table below). Replayable worlds with criteria = scorable | none scorable → `recorded` |
+| 5. Open a round? | a scorable world must carry a **fresh signal that asks for a fix** (correction or complaint, rating ≤ 2, an issue, an expected answer) | none → `recorded` |
+| 6. Evaluation worlds W | fresh signals → signals asking for a fix → signals asking to keep, most recent first within each, at most 8 | — |
+| 7. Measure the current harness | 2 trials per world in W. A turn the same model actually ran on the current version is itself one trial; cached replays are reused; the rest are replayed | more than 15% replays failed → `failed` / every criterion passes → `kept` |
+| 8. Noise band, directives | δ = max(2·√2 × the trial-bootstrap standard error, one verdict = 1 / sum of criteria), S★ = the current harness's S; edit budget b_t, stall σ_t, untried components, pruning targets | — |
+| 9. Analysis | one call over the worst trial of up to 6 failing worlds and up to 3 passing worlds: failure modes and success habits | — |
+| 10. Two candidates | in parallel, in git workspaces copied from the current harness: propose (within the edit budget) → leakage review (rejects conversation content, injected conversation summaries, environment claims, disabled safety; one repair) → tag edits by touched addresses → load check | per candidate `no_proposal`, `critic_reject`, `smoke_fail` |
+| 11. Measure candidates | replay the same W with each candidate (2 per world, candidates in parallel); stop early once missing the floor is certain | more than 15% replays failed → `eval_invalid` |
+| 12. Judge | the RRSI rules as is (below) | no admissible candidate → `kept` |
+| 13. Record, adopt | append every candidate's edit records to the history and advance the round number; if there is a winner, turn it into a payload, put it in the lineage and make it current — unless the user changed the harness during the consolidation, then it is not adopted | `adopted` or `kept` |
+
+**Signal → criterion** (the judge passes or fails each criterion on one replayed answer)
+
+| Signal | Criterion |
+|---|---|
+| Expected answer (quality evaluation) | same facts, numbers and conclusions as the expected answer |
+| Rating ≤ 2, or an issue or comment | the problem the user reported (issue + comment) is absent |
+| Rating ≥ 4 | keeps every key point of the answer the user accepted (regression guard) |
+| Next message is a correction or complaint | the judge's "what a better answer must satisfy" |
+| Next message accepts | keeps every key point of that answer (regression guard) |
+| Criteria written by the user (when the host passes them — XGEN does not yet) | as written |
+
+**Judgement.** Trial score r = criteria passed / criteria; S = total passed over all trials / total criteria; C = mean policy tokens per trial.
+A candidate H′ is admissible only if it meets all of the following.
+
+- Floor: S′ ≥ S★ − δ
+- If ΔS > δ, the cost rule: relative token growth ΔC ≤ 0.10 + 35.4·ΔS
+- If ΔS ≤ δ, the in-band rule: 100·ΔS − 15·ΔC + 0.5·ν > 0, where ν counts structural kinds (skill, memory, client_tool) being accepted for the first time.
+- Guards:
+  - Every edited parameter must be read at least once during the replays.
+  - The valid-answer rate must not drop by more than 0.15, and the empty-answer rate must not rise by more than 0.15.
+
+Among admissible candidates the highest S wins. Ties go to fewer tokens, then fewer edits. With no admissible candidate the current harness stays.
+
+### The recursion — what carries into the next consolidation
+
+H_{t+1} = consolidate(H_t, world pool, edit history, signals). The adopted H_{t+1} produces the next turns, and those turns become worlds that the
+next consolidation evaluates on (Dream-RSI: redeploy → new records → a larger simulator). These five things carry over.
+
+| What carries over | Stored in | Use in the next consolidation |
+|---|---|---|
+| Current harness and lineage | `geny_rsi_agents.current_version`, `geny_rsi_harnesses` (per version: payload, parent, adopting consolidation, summary) | the starting harness; rollback targets |
+| World pool | `geny_rsi_worlds` (latest 60 per agent) | evaluation worlds; turns recorded on the current version are used directly as its trials |
+| Edit history 𝓛 | `geny_rsi_agents.state.records` | evidence for the proposer (rejected methods are not redrawn), components already exercised, pruning targets 𝓑_t (components with no gain over the last 4 rounds), first-acceptance (ν) |
+| Round number t, cumulative gain | `state.t`, `state.progress` | edit budget b_t = 3 → 1 (shrinks over 20 rounds, 1 afterwards); stall σ_t (if the accepted gains of the last 3 rounds sum to ≤ δ, one candidate slot is reserved for an untried component) |
+| Replay and verdict caches | `state.cache`, `state.verdicts` | the same version on the same world is not replayed again; the adopted version's replays become the current harness's trials next time; the same (criterion, answer) is not judged again |
+
+The round number and the edit history grow only in consolidations that actually run a round. `recorded`, `kept` (before a round) and `failed`
+consolidations leave only signals and caches.
+
+### Storage — what is where
+
+**DB (core models; an agent = one workflow_id)**
+
+| Table | One row | Main columns | Kept |
+|---|---|---|---|
+| `geny_rsi_agents` | an agent | `current_version` (empty = H0), `state` (consolidation state JSON) | 1 row |
+| `geny_rsi_harnesses` | an adopted version | `version`, `parent_version`, `payload` (manifest + files), `run_id`, `summary` | all |
+| `geny_rsi_worlds` | a turn | `io_id` (execution_io), `interaction_id`, `seq` (order in the conversation), `harness_version`, `model`, `world` (JSON), `signals` (JSON), `replayable` | latest 60 |
+| `geny_rsi_runs` | a consolidation | `kind` (`consolidate`), `io_id` (the turn that started it), `status`, `start_version`, `adopted_version`, `result` (round summary, no payload), `error` | latest 200 |
+| `geny_rsi_trajectories` | a turn | harness version, termination reason, policy tokens, call counts (no content) | all |
+
+**What a world (`world` JSON) holds** — only what replay needs.
+
+- What the model saw: the system parts (the material before the harness builds the prompt), the output schema, the node knobs that are not secret
+  (temperature, tokens, thinking level, iterations, window size …), the earlier conversation, this input, turn state left by assembly
+- The memory retrieval result of the first iteration
+- The tool list (name, description, schema, exposure) and the result of every call (after the host result filter = what the model saw; each cut at
+  32,000 characters)
+- The turn's answer, status, termination reason, policy tokens and transcript
+
+Not held: keys, credentials, client objects, and what the harness built (candidates rebuild it in replay). Images become placeholders. A world over
+2 MB is kept with `replayable=false` and is not used for evaluation.
+
+**Consolidation state (`state` JSON)**
+
+| Field | Content | Bound |
+|---|---|---|
+| `t` | next round number | — |
+| `records` | measured edit records (round, candidate, component, hypothesis, ΔS, ΔC, outcome, part of the diff) | latest 200 rounds |
+| `progress` | cumulative accepted ΔS per round | — |
+| `analysis` | names of the previous failure modes and success habits (keeps naming stable) | 12 each |
+| `scoreboard` | whether the worlds an edit predicted actually moved | latest 40 |
+| `cache` | harness version → world → replay results (answer, tokens, status, parameters read; no transcript) | 3 versions (current and adopted are kept), 2 per world |
+| `verdicts` | hash of (criterion, reference, request, answer) → pass and reason | 4,000 |
+
+**Pod memory (gone on restart; behaviour is the same without it)**
+
+- The current-harness payload cache: 15 seconds per agent. The pod clears it at once on adoption, rollback or cloning.
+- The consolidation table: agent → {running, pending flag, latest turn}.
+- Harness directories: unpacked once per version (`XGEN_RSI_HARNESS_CACHE`, or a temp directory).
+- One consolidation's temp directory: the harness git repository, the candidate workspaces, a copy of the history file. It is deleted when the
+  consolidation ends. Each replay also uses a temp working directory and deletes it.
+
+### Procedures that manage state specially
+
+| Procedure | Why | How |
+|---|---|---|
+| One consolidation per agent | two consolidations editing the same state would split the history and round numbers | within a pod: a turn that ends while one runs only sets a pending flag, and one more consolidation runs afterwards for the latest turn (not one per accumulated turn). Across pods: a `running` record younger than 15 minutes means skip |
+| Re-reading missed signals | skipped consolidations and turns on other pods must still be learned from | every consolidation reads up to 4 unread pairs for implicit signals; explicit signals are compared with XGEN's values every time |
+| Ratings or expected answers added later | leaving a rating on the screen does not start a consolidation by itself | the consolidation after that agent's next turn finds it by comparison and uses it as a fresh signal |
+| Interrupted consolidations | a pod restarting mid-consolidation leaves a `running` record | a `running` record older than 15 minutes is closed as `interrupted`; its age is computed against the DB's own clock (the column has no time zone, and the DB and the server may differ) |
+| Rollback vs adoption | a consolidation must not overwrite a rollback the user made while it ran | just before adopting it checks that the current version is still the one it started from; if not, it does not adopt and records `kept` with the reason |
+| Saving state | the next consolidation continues from it | whenever the consolidation returns a result (with or without a round) the whole `state` is overwritten; newly read signals are written to their world rows. If the consolidation ends with an exception (a `failed` record) the state is left as it was |
+| Order within a conversation | the previous turn must be found correctly even after old worlds are deleted | `seq` = the conversation's maximum + 1 |
+| Replay memory | replay must not touch the user's memory | the replay memory only returns the recorded retrieval and never writes (no execution record, no distillation either); replay is detected by a class attribute only |
+
+### The exact replay rules
+
+- The turn plan is rebuilt from the world; only the model, provider and credentials are switched to the current policy (the agent's current model).
+- A tool call is answered from the record in this order:
+  1. the same name and the same arguments (canonical JSON)
+  2. arguments that differ only in whitespace or case
+  3. a guide tool (a gate) gets its recorded text regardless of arguments
+  4. anything else gets "no recorded result" (Dream-RSI's Child = ∅) as an error result. The replay continues, and off-support calls are counted.
+- A call recorded several times is answered in order; once the records run out, the last result is given again.
+- Meta tools that only read the registry (`ToolSearch`, `SelfExtendGuide`) really run on the replay registry. Tools the harness contributes (`ReadSkill` etc.) are contributed again by the replaying harness.
+- With the same harness and the same model responses, replay sends the same requests (system, messages, tools) as the real turn (fixed by tests).
+- Actions outside the record have no result, so a change that makes the agent use many new tools is at a disadvantage in replay. Such directions are
+  verified by the real turns after an adoption, which become the next worlds.
+
+### When no consolidation runs
+
+- Agent Geny (the 21-stage runtime) never calls this hook.
+- Turns of a frozen copy leave worlds but are not consolidated. A frozen copy's harness stays at the version it was made with.
+- Claude Code / Codex agents leave no world, because the kernel does not own the loop. Their consolidation is recorded as `skipped`.
+- If an administrator pins a harness with `XGEN_RSI_HARNESS_DIR`, every turn runs on it (it is checked before the agent harness).
+  `XGEN_RSI_RECORD_WORLD=0` stops recording worlds.
+
+**Measured (gpt-6-luna)**:
+- A consolidation after a turn without a signal finished in 0.001 s.
+- After the correcting turn, a consolidation adopted 70.5 s after the turn ended (XGEN-path E2E), and the very next turn of a new conversation ran
+  on the adopted harness.
+- With the library alone, correction to adoption took 52.9 s.
+
+**Implementation status**
 
 | Stage | Content | Status |
 |---|---|---|
 | 1 | Ship H0 only, fix parity defects between the two runtimes | 0.6.0 |
 | 2 | Agent harness and trajectory host hooks, criteria checks | 0.7.0 |
-| 3 | Turn world recording (`XGEN_RSI_RECORD_WORLD`), world replay, next-message signals, turn consolidation API (`xgen_rsi.consolidate`) | 0.8.0 |
-| 4 | XGEN — consolidation at the end of each turn, world and state storage, consolidation log in the [Harness] tab | workflow · core · frontend MRs |
+| 3 | Turn world recording (`XGEN_RSI_RECORD_WORLD`), world replay, next-message signals, turn consolidation API (`xgen_rsi.consolidate`) | 0.8.0 · 0.8.1 |
+| 4 | XGEN — consolidation at the end of each turn, world and state storage, consolidation log in the [Harness] tab | core !916 · workflow !2064 · frontend !2772 merged |
 
-An administrator can pin every agent to one harness with `XGEN_RSI_HARNESS_DIR` (a directory path or `builtin:h0`).
 
 ---
 
