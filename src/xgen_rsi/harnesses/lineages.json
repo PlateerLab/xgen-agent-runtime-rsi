@@ -1,8 +1,5 @@
 {
   "lineages": {
-    "default": "h0",
-    "openai:gpt-6-luna": "luna-xgen-pro",
-    "openai:gpt-6-sol": "sol-xgen-hard",
-    "anthropic:claude-haiku-4-5": "haiku-xgen-pro"
+    "default": "h0"
   }
 }

@@ -201,3 +201,13 @@ def test_extra_blocks_accept_plain_strings_and_objects():
 
     out = compose_parts([("base", "B")], extra=["Check counts twice.", {"id": "x", "text": "Y"}, None, ""])
     assert out == [("base", "B"), ("extra", "\n\nCheck counts twice."), ("x", "\n\nY")]
+
+
+def test_failed_harness_load_reports_and_still_tears_down(monkeypatch, tmp_path):
+    """하네스를 못 읽으면 기존 계약대로 [ERROR] 출력으로 끝나고, 조립이 만든 자원은 턴 정리로 닫는다."""
+    client = ScriptedClient([text_step("ok")])
+    host = FakeHost(settings={"XGEN_RSI_HARNESS_DIR": str(tmp_path / "missing")})
+    chunks = _go(monkeypatch, client, host)
+    text = "".join(c for c in chunks if isinstance(c, str))
+    assert text.startswith("[ERROR] geny agent could not start:")
+    assert client.requests == [] and host.finalized == 1

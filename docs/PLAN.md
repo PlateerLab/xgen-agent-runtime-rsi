@@ -2,7 +2,7 @@
 
 > 목표: 기존 21-stage 하네스(`xgen-agent-runtime`)의 **입력·출력 인터페이스만 유지**하고, 기존 방법론 + RRSI + Dream-RSI 를 융합한 새 하네스 프레임워크를 처음부터 설계·구현한다. 다중 공급자 사용은 그대로 유지하고, 두 논문의 핵심 수식과 계산은 전부 정확히 구현한다.
 > 근거 문서: [README.md](README.md) 의 문서 지도. 원칙은 [design/30](design/30-fusion-philosophy.md), 구조는 [design/31](design/31-architecture.md).
-> 상태(2026-10-01): **Phase 0–3·7 구현 완료, Phase 4–6 코드 완료(실제 LLM 측정 미실행), Phase 8–9 미착수.** 현황은 [§4](#4-구현-현황-2026-10-01).
+> 상태(2026-10-02): Phase 0–7 구현·실측 완료(방법론 실험). 운영 구조는 [design/40](design/40-agent-self-evolution.md)(에이전트마다 H0 에서 시작해 사용으로 진화) — 구현 중. 현황은 [§4](#4-구현-현황-2026-10-02-060).
 
 ---
 
@@ -194,7 +194,7 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 | ID | 결과 |
 |---|---|
 | D-1 | (a) 채택 — 새 저장소 `xgen-agent-runtime-rsi`, import `xgen_rsi`. 원격 공개는 별도 결정 |
-| D-2 | A, **두 패키지 완전 독립** — geny-rsi 는 자체 진입점 `GenyRSITurnExecutor().run(host, **kwargs)`(같은 계약)와 턴 조립(`xgen_rsi.assembly`)을 갖고, 호스트가 진입점을 고른다. 0.3.0 부터 xgen-agent-runtime 을 import·의존하지 않고 4.80.0 사본 `xgen_rsi.base` 를 쓴다. 한때 런타임에 넣었던 엔진 선택점(4.76.0·4.79.0)은 4.80.0 에서 걷어 냈다 — RSI 코드는 이 저장소에만 둔다 |
+| D-2 | A, **두 패키지 완전 독립** — geny-rsi 는 자체 진입점 `GenyRSITurnExecutor().run(host, **kwargs)`(같은 계약)와 턴 조립(`xgen_rsi.assembly`)을 갖고, 호스트가 진입점을 고른다. 0.3.0 부터 xgen-agent-runtime 을 import·의존하지 않고 사본 `xgen_rsi.base`(0.6.0 기준 4.81.0)를 쓴다. 한때 런타임에 넣었던 엔진 선택점(4.76.0·4.79.0)은 4.80.0 에서 걷어 냈다 — RSI 코드는 이 저장소에만 둔다 |
 | D-3 | (a) — subagent 비활성(𝒦_enabled 8종), 수식은 9종 유지 |
 | D-6 | 재현 — `"\n[ERROR] "` 청크를 기존과 같게 |
 | D-7 | 기존 유지 — 외부 usage = main + explore_attempt, 정확한 c(τ) 는 원장·기록에만 |
@@ -203,23 +203,23 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 
 ---
 
-## 4. 구현 현황 (2026-10-02, 0.5.0)
+## 4. 구현 현황 (2026-10-02, 0.6.0)
 
-검증한 것(테스트 471개, xgen-agent-runtime 이 설치되지 않은 환경):
+운영 구조는 [설계 40](design/40-agent-self-evolution.md) — **모든 Agent Geny RSI 는 H0 에서 시작하고, XGEN 안에서 에이전트마다 그 사용으로 자기
+하네스를 진화시킨다.** 패키지는 H0 만 싣는다.
 
-- 독립 패키지: 바탕 런타임은 xgen-agent-runtime 4.80.0 사본 `xgen_rsi.base`(519 파일 중 517 바이트 동일, `COPY.json`·`tools/sync_base.py`·테스트로 검사).
+검증한 것(xgen-agent-runtime 이 설치되지 않은 환경의 테스트):
+
+- 독립 패키지: 바탕 런타임은 xgen-agent-runtime 4.81.0 사본 `xgen_rsi.base`(519 파일 중 517 바이트 동일, `COPY.json`·`tools/sync_base.py`·테스트로 검사).
 - `rsi_math`: 두 논문 수식 전부 + 정확 경계 조기 종료. 공식 RRSI 구현과의 차분 테스트, mypy strict.
-- 커널·H0: 기존 엔진과 동등성 9 시나리오 + 실제 응답 재생에서 요청 바이트 동일(1차).
-- 스위트: `xgen-core`·`xgen-hard`·`xgen-pro`(천장 아래 모델용, 3회 난이도 보정).
-- L1 RRSI: 실제 모델로 진화 — 1차 gpt-6-sol(T=6), 2차 gpt-6-luna(T=5, 역할 gpt-6-sol)·claude-haiku-4-5(2/5, 역할 claude-sonnet-5).
-  가드: 측정되지 않은 편집, 환경 단정(검토자·헌법 규칙 11), 분석기 보고 강제.
-- L2 Dream: 실제 모델 사이클 — gpt-6-sol 승격(1차), luna 유지·거절(2차).
+- 커널·H0: 기존 엔진과 동등성 시나리오 + 실제 응답 재생에서 요청 바이트 동일. 두 턴 경로 대조 검토(Geny 요소 누락 없음, H0 에서도 다른 5곳은 보고서 §1.2).
+- 스위트: `xgen-core`·`xgen-hard`·`xgen-pro`.
+- RRSI·Dream: 실제 모델로 방법론 실험(보고서 §4–§6). 실험 하네스·정책은 패키지에 넣지 않는다.
 - XGEN: Agent Geny / Agent Geny RSI 두 노드, 에이전트 단위 패키지 선택(대화·화면 API·예약 작업, workflow !2049·!2050).
-- 패키지 하네스: gpt-6-luna `luna-xgen-pro`, claude-haiku-4-5 `haiku-xgen-pro`, gpt-6-sol `sol-xgen-hard`, 그 밖 H0 — XGEN 경로 실제 턴으로 확인(luna·sol).
 
-검증하지 않은 것 / 남은 것:
+남은 것:
 
-- **보류 분할에서 확인된 점수·비용 개선** — luna H\* 는 evolve +0.029 였지만 보류 분할에서 잡음 안(적용은 했다: `luna-xgen-pro`).
-- haiku 진화 3~5 라운드·보류 분할·Dream(API 크레딧 소진으로 중단).
-- 평가 호스트에 코드 실행 도구가 없다(운영과 다름) — 샌드박스 실행을 평가에 넣는 것이 다음 과제.
-- 운영 턴 안 탐색과 Phase 8 승격 파이프라인.
+- 설계 40 의 2~4단계 — rsi 호스트 훅(`rsi_agent_harness`·`rsi_record`)·기준 판정 검사·사용 기록 → 과제·에이전트 진화 실행 API, XGEN 저장·작업자·API,
+  Agent Geny RSI 상세 [하네스] 탭.
+- XGEN 쪽 동일성 결함(보고서 §1.2 XGEN) 수정.
+- haiku 진화 3~5 라운드·보류 분할·Dream(API 크레딧 소진으로 중단한 방법론 실험).

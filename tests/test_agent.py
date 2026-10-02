@@ -84,12 +84,10 @@ def test_default_model_and_validation():
         raise AssertionError("bad engine accepted")
 
 
-def test_rsi_turn_runs_the_bundled_harness_for_its_model(monkeypatch, tmp_path):
-    """gpt-6-luna 턴은 RRSI 가 채택한 luna-xgen-pro 하네스로 돈다(궤적 기록이 그 하네스를 밝힌다)."""
+def test_rsi_turn_starts_from_h0_for_any_model(monkeypatch, tmp_path):
+    """어떤 모델이든 RSI 턴은 H0 로 시작한다(궤적 기록이 그 하네스를 밝힌다)."""
     monkeypatch.setattr(runner_mod, "build_client", _client([text_step("ok")]))
-    luna = GenyRSI.minimal(provider="openai", model="gpt-6-luna", api_key="k", record_dir=str(tmp_path / "rec"))
-    r = luna.run_sync("hi")
-    assert r.harness.startswith("luna-xgen-pro@sha256:")
-    assert r.record["harness_name"] == "luna-xgen-pro" and r.record["harness_id"] == r.harness.split("@", 1)[1]
-    other = GenyRSI.minimal(provider="openai", model="gpt-4o-mini", api_key="k")
-    assert other.run_sync("hi").harness.startswith("h0@sha256:")
+    for model in ("gpt-6-luna", "gpt-4o-mini"):
+        agent = GenyRSI.minimal(provider="openai", model=model, api_key="k", record_dir=str(tmp_path / model))
+        r = agent.run_sync("hi")
+        assert r.harness.startswith("h0@sha256:") and r.record["harness_name"] == "h0"

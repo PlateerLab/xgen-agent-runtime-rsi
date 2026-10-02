@@ -6,7 +6,7 @@ geny-rsi 는 **같은 입력 계약**(``run(host, **kwargs)``)을 지키기 위�
 (각본 모델)와 ``experiments/replay_equivalence.py``(실제 모델 응답 재생)가 잰다.
 
 원본: PlateerLab/xgen-agent-runtime ``host/turn_executor.py`` (v4.79.0 의 ``assemble_turn``·``TurnPlan``·``SystemPromptParts``.
-조립 본체는 v4.80.0 의 ``AgentTurnExecutor.run`` 과 동작이 같다), Apache License 2.0. 바꾼 것: 실행 엔진 선택 코드와 21-stage 실행
+조립 본체는 v4.80.0·v4.81.0 의 ``AgentTurnExecutor.run`` 과 동작이 같다 — 4.81.0 은 웹 검색 도구만 바뀌었다), Apache License 2.0. 바꾼 것: 실행 엔진 선택 코드와 21-stage 실행
 경로를 뺐고, import 는 전부 사본 ``xgen_rsi.base`` 를 본다(xgen-agent-runtime 을 import 하지 않는다).
 """
 

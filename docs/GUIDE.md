@@ -104,16 +104,9 @@ geny-rsi 가 읽는 호스트 설정(`host.setting`):
 - **구조 레버(𝒦_str)**: `skill`(SKILL.md 카탈로그 + `ReadSkill` 점진 공개), `client_tool`(노출·실행 정책), `memory`(기억 정책).
 - `rsi harness show [DIR]` · `rsi harness validate [DIR]` · `rsi harness diff A B`.
 
-**패키지에 든 하네스** (`src/xgen_rsi/harnesses/`, 0.5.0). 설정이 없으면 `lineages.json` 이 정책 모델로 고른다.
-
-| 정책 계열 | 하네스 | 출처 |
-|---|---|---|
-| `openai:gpt-6-luna` | `luna-xgen-pro` | xgen-pro RRSI 5라운드 채택본(보고서 2026-10-02) |
-| `openai:gpt-6-sol` | `sol-xgen-hard` | xgen-hard RRSI 6라운드 채택본, 평가에서 읽히지 않은 `memory.archive=false` 만 H0 값으로 되돌림(보고서 2026-10-01) |
-| `anthropic:claude-haiku-4-5` | `haiku-xgen-pro` | xgen-pro RRSI 0라운드 채택본, 진화 중단 상태(보고서 2026-10-02) |
-| 그 밖 | `h0` | 시작 하네스 |
-
-`rsi evolve export` 로 꺼낸 채택본을 이 디렉터리에 넣고 `lineages.json` 에 계열을 적으면 다음 릴리스부터 XGEN 의 Agent Geny RSI 가 그 하네스를 쓴다.
+**패키지에 든 하네스** (`src/xgen_rsi/harnesses/`). **H0 하나뿐**이고 계열 표는 `{"default": "h0"}` 다 — 어떤 모델의 에이전트든 H0 에서 시작한다.
+운영 하네스는 XGEN 안에서 에이전트마다 그 사용으로 진화한다([설계 40](design/40-agent-self-evolution.md)). 실험에서 `rsi evolve export` 로 꺼낸
+하네스는 그 실험 스위트에 맞춘 것이라 패키지에 넣지 않는다 — 재현·비교할 때 `XGEN_RSI_HARNESS_DIR` 로 고정해 쓴다.
 
 ---
 
@@ -191,6 +184,7 @@ rsi dream status runs/cycle1
 - 같은 과제는 라이브와 재생에서 **같은 관측 매핑**으로 보인다(부분 점수도 점수 — 검사 가중 보상이므로).
 - 탐색 정책 코드는 **별도 프로세스**(CPU 시간·메모리 한도) + 제한된 namespace(허용 import 목록, 결정성, 시간 제한, 접두부 밖 정보 접근 차단)에서만 돈다.
 - 재생 승자는 같은 과제를 실제로 탐색해 `rsi_math.judge`(측정 유효성 + 바닥 Eq.5 + 비용 규칙 Eq.7/17)를 통과해야 승격된다.
+- 운영 대화 턴은 검증기가 없어 π_E 를 쓰지 않는다.
 
 ---
 

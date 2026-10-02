@@ -1,6 +1,6 @@
 """geny-rsi 는 독립 패키지다 — xgen-agent-runtime 을 import 하지도, 의존성으로 두지도 않는다.
 
-바탕 런타임은 xgen-agent-runtime 4.80.0 을 복사한 ``xgen_rsi.base`` 다. 어느 경로로든 원본 패키지가 끼어들면 이 테스트가 잡는다.
+바탕 런타임은 xgen-agent-runtime 4.81.0 을 복사한 ``xgen_rsi.base`` 다. 어느 경로로든 원본 패키지가 끼어들면 이 테스트가 잡는다.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""xgen_rsi.base — geny-rsi 의 바탕 런타임. xgen-agent-runtime 4.80.0 을 복사해 이 패키지가 소유한다.
+"""xgen_rsi.base — geny-rsi 의 바탕 런타임. xgen-agent-runtime 4.81.0 을 복사해 이 패키지가 소유한다.
 
 geny-rsi 는 xgen-agent-runtime 을 import 하지도, 의존성으로 두지도 않는다. 공급자 계층·도구·기억·호스트 계약·
 21-stage 엔진(geny 기준선)까지 필요한 것은 전부 이 사본에서 온다. 원본이 바뀌어도 여기는 따로 갱신한다.
@@ -124,8 +124,8 @@ from xgen_rsi.base.memory import (
 from xgen_rsi.base.memory.factory import provider_from_manifest_memory
 
 #: 복사한 원본 버전 — 이 사본은 xgen-agent-runtime 배포본과 무관하게 이 값으로 자신을 밝힌다.
-COPIED_FROM = "xgen-agent-runtime 4.80.0"
-__version__ = "4.80.0"
+COPIED_FROM = "xgen-agent-runtime 4.81.0"
+__version__ = "4.81.0"
 
 __all__ = [
     # Core

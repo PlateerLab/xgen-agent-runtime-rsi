@@ -1,8 +1,4 @@
-"""하네스 고르기 — 고정 설정 → 계열 표 설정 → 패키지에 든 계열 표 → 내장 H0.
-
-RRSI 로 채택한 하네스는 패키지(``harnesses/`` + ``lineages.json``)에 담아 릴리스한다. 호스트(XGEN)는 설정 없이도
-패키지 버전을 올리면 그 하네스를 쓰고, 관리자는 ``builtin:<이름>`` 으로 패키지 하네스 하나를 고정할 수 있다.
-"""
+"""하네스 고르기 — 고정 설정 → 계열 표 설정 → 패키지에 든 계열 표(H0 만) → 내장 H0."""
 
 from __future__ import annotations
 
@@ -29,22 +25,16 @@ def test_default_uses_the_bundled_table_and_falls_back_to_h0():
     assert json.loads(ex.BUILTIN_LINEAGES.read_text())["lineages"]["default"] == "h0"
 
 
-def test_bundled_rrsi_harnesses_are_applied_per_model_family():
-    """RRSI 가 채택한 하네스는 모델 계열별로 적용된다(보고서 2026-10-01·10-02)."""
-    from xgen_rsi.harness.runtime import instantiate
-    from xgen_rsi.harness.spec import load_manifest
+def test_every_model_starts_from_h0():
+    """패키지는 RSI 파이프라인의 기본값(H0)만 싣는다 — 어떤 모델의 에이전트든 H0 에서 시작해 그 에이전트의 사용으로 진화한다.
 
-    expected = {("openai", "gpt-6-luna"): "luna-xgen-pro", ("openai", "gpt-6-sol"): "sol-xgen-hard",
-                ("anthropic", "claude-haiku-4-5-20251001"): "haiku-xgen-pro"}
-    for (provider, model), name in expected.items():
-        path, label = ex.resolve_harness_dir(_Host(), provider, model)
-        assert label == f"builtin:{name}" and path == (ex.BUILTIN_DIR / name).resolve()
-        manifest = load_manifest(path)
-        assert manifest.name == name and manifest.version_id() != load_manifest(ex.BUILTIN_H0).version_id()
-        instantiate(manifest)  # 구성요소가 실제로 선다
-    # 측정되지 않은 편집(memory.archive=false)은 운영 하네스에 싣지 않는다
-    sol = load_manifest(ex.BUILTIN_DIR / "sol-xgen-hard")
-    assert next(c for c in sol.components if c.id == "memory.archive").params["archive"] is True
+    실험에서 진화시킨 하네스(특정 스위트·모델에 맞춘 것)는 패키지에 넣지 않는다.
+    """
+    assert json.loads(ex.BUILTIN_LINEAGES.read_text()) == {"lineages": {"default": "h0"}}
+    assert sorted(p.name for p in ex.BUILTIN_DIR.iterdir() if p.is_dir() and (p / "manifest.json").exists()) == ["h0"]
+    for provider, model in [("openai", "gpt-6-luna"), ("openai", "gpt-6-sol"), ("anthropic", "claude-haiku-4-5-20251001"),
+                            ("anthropic", "claude-sonnet-5"), ("google", "gemini-3-pro")]:
+        assert ex.resolve_harness_dir(_Host(), provider, model) == (ex.BUILTIN_H0.resolve(), "builtin:h0")
 
 
 def test_builtin_name_in_the_fixed_setting():

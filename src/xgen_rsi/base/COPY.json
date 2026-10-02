@@ -1,6 +1,6 @@
 {
  "files": {
-  "__init__.py": "a3fae0fbc4366961326010a0447feec27746c07a9f354456ea6bfb7020a1db45",
+  "__init__.py": "00b950937dc35c98efc191a62b72e6dd29c94c26d57c8911a71a010292819a42",
   "audio/__init__.py": "21dc717b48daed027f02168dd171b6678d611b4a28cbe0dd2ebed500e8b40a8b",
   "audio/stt/__init__.py": "ebbc20be4da50c9d2e14c2b57ba8f025e54f7e2ab881dfa4ecea0a4120964828",
   "audio/stt/openai_compatible.py": "031a4abbfbd3fadb98b68fc9bac2d9afe2cf16c0261a4bc94d9e70618f8f2e55",
@@ -463,7 +463,7 @@
   "tools/built_in/_search.py": "a04ed322f834845abe09fa5266e09b1f0170fa599e93e5e54f306a2956089aea",
   "tools/built_in/_skill_gateway.py": "debdb6785a565c4b528a79eb3d818700974b7fe89f139c15e510614df190dbde",
   "tools/built_in/_ssh_store.py": "a449eaf108f92917d4e5d09e63ba1aaeacd7a6d00892223c8ac2d6e8e351face",
-  "tools/built_in/_web_search_backends.py": "feb3eb8e4e6e6728e64756de3601b4a82017cfce19b9d85fa91fd94379f10bcb",
+  "tools/built_in/_web_search_backends.py": "d3464cccf57df6c25aa42c7adc3320afc7c752ed65c8457348deba12b350674e",
   "tools/built_in/ask_user_question_tool.py": "9b90d1a48766700ec6aec624dbdf3f3d6132775cc6884cee038866d9afcdc637",
   "tools/built_in/atlassian_tools.py": "43fd75e9a47d4601cc1c613cf0e7d17f87315c72f7b0cb7e4dfc11f1c3fc7f9b",
   "tools/built_in/audio_tools.py": "b1d398d4b8568fe0ea1325b45eaee00e1620e54407f8820997d76996b43f5337",
@@ -490,7 +490,7 @@
   "tools/built_in/tool_batch_tool.py": "fa98b66d9ef7b33a1db979ac8be2262b102c18d0cd9841fc9755bf665d00c9c2",
   "tools/built_in/tool_search_tool.py": "a29faddd1c8220844285e7f48eb36a6459a1c3f442cb494383b613fc37f14f90",
   "tools/built_in/web_fetch_tool.py": "3395d190ab1e02fcc4239963f9449efcd677422066841b5ba5f220d41a988355",
-  "tools/built_in/web_search_tool.py": "0ac01be51d68ed7aa511aa5540afd19b5ec99060317b692170443ecabdafd453",
+  "tools/built_in/web_search_tool.py": "98b113c8c59524a98ac6bdd05c21133998cb19f4c43e3586e826995419041441",
   "tools/built_in/workspace_tools.py": "06ded3fabe73c94f6d0b9f1ca72d011d43018816b6c53f6cbee4036bbc684d54",
   "tools/built_in/worktree_tools.py": "e80c488f588e3f8b9d351a91c32e3a049463158dd17af802390db15a5221a967",
   "tools/built_in/write_tool.py": "1bc3cac4e1610961c9ce7ff46d7ddf09d4d1e2bd37ccd18432621d722f181683",
@@ -998,7 +998,7 @@
   "tools/built_in/_search.py": "a04ed322f834845abe09fa5266e09b1f0170fa599e93e5e54f306a2956089aea",
   "tools/built_in/_skill_gateway.py": "debdb6785a565c4b528a79eb3d818700974b7fe89f139c15e510614df190dbde",
   "tools/built_in/_ssh_store.py": "26b9a19ce7f5bc034514ea3b885d6b47dfbb73a5486bd481509076ce873f1440",
-  "tools/built_in/_web_search_backends.py": "72453b67f914068b810e3a438c201b05adf17cef264109d80b465d9c8f6f578d",
+  "tools/built_in/_web_search_backends.py": "7d9c2393216101b808fadbb27eb0a35a9b90df9ee5cf95fefd82bcc77a700f6e",
   "tools/built_in/ask_user_question_tool.py": "2f52e13647016333a0dee73369874885e11ee2cce58d9fffeb8e05d4d8da8f5f",
   "tools/built_in/atlassian_tools.py": "de60d39722eafbfca1d0de2ed0a3304e47dc8d983cf184d7370aa90df6f383ce",
   "tools/built_in/audio_tools.py": "ee326f46ea9f9cf20a9573166e53f44bca55edbcc87d706bbbb93b1f85c90644",
@@ -1025,7 +1025,7 @@
   "tools/built_in/tool_batch_tool.py": "5b3f050fba13723745713ef2e2c5dc30ae2013c2c81fe1edbb5a7050940a16c7",
   "tools/built_in/tool_search_tool.py": "36da66eccd3c01d1d2094ea427ce3692c3d8347f18dc6f3899925500c7a01460",
   "tools/built_in/web_fetch_tool.py": "3e24ef4811fd12ce684a465f4508c139f50a1c625a51e32f3325bbab0200eb13",
-  "tools/built_in/web_search_tool.py": "2ef6b4ebdd9341f354ee3b9318e47e2236288237dd5784c62431c26a963e9e49",
+  "tools/built_in/web_search_tool.py": "be3c4a8bf2a2b847f1e0f85a2059ec5e3ef45d335ac06153d8c792d3873a1db3",
   "tools/built_in/workspace_tools.py": "1b2f0d948bc96b12332e7fd641321bdc77397c956609cd7d7090627e7a027383",
   "tools/built_in/worktree_tools.py": "4a0cf99994fe363a38c229d9d33a5d90b1e4427a875fb7b7455c1fb706b96c47",
   "tools/built_in/write_tool.py": "67573202788aca0c57cd31275307d335df20e987e16d710929dc5037b113d8b3",
@@ -1060,5 +1060,5 @@
   "xgen_rsi.base"
  ],
  "source": "xgen-agent-runtime",
- "version": "4.80.0"
+ "version": "4.81.0"
 }

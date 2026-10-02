@@ -29,6 +29,7 @@ class GenyRSITurnExecutor:
 
         streaming = bool(kwargs.get("streaming", True))
         resources: Dict[str, Any] = {}
+        plan: Any = None
         try:
             executor = RSITurnExecutor()
             plan = assemble_turn(host, kwargs, resources)
@@ -38,6 +39,13 @@ class GenyRSITurnExecutor:
         except Exception as exc:  # noqa: BLE001 — 조립 실패는 출력으로(기존 엔진과 같은 계약)
             logger.exception("geny-rsi: failed to build the turn")
             _close_resources(resources)
+            # 조립은 끝났는데 준비(하네스 로드·클라이언트)에서 실패하면 조립이 만든 자원(CLI 작업 공간·브릿지 토큰,
+            # 실행 작업 공간, 샌드박스 반영)을 턴 정리로 닫는다.
+            if plan is not None and not isinstance(plan, str):
+                try:
+                    plan.teardown()
+                except Exception:  # noqa: BLE001
+                    logger.warning("geny-rsi: teardown after a failed start failed", exc_info=True)
             err = f"[ERROR] geny agent could not start: {exc}"
             return iter([err]) if streaming else err
         return executor.execute(prepared, plan, host)

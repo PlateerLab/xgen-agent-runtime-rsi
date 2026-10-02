@@ -1,6 +1,10 @@
 # xgen-agent-runtime-rsi — 조사·설계 문서 모음
 
-기존 21-stage 하네스(`xgen-agent-runtime` 4.75.0)를 **입력·출력 인터페이스만 유지한 채** 기존 방법론 + RRSI + Dream-RSI 를 융합한 새 하네스 프레임워크로 다시 짓기 위한 조사와 계획이다. 작성일 2026-10-01. **현재 단계: 조사·계획 완료, 구현 전.**
+기존 21-stage 하네스(`xgen-agent-runtime` 4.75.0)를 **입력·출력 인터페이스만 유지한 채** 기존 방법론 + RRSI + Dream-RSI 를 융합한 새 하네스 프레임워크로 다시 짓기 위한 조사와 계획이다. 작성일 2026-10-01.
+
+> **이 문서 모음은 2026-10-01 설계 시점의 기록이다.** 그 뒤 구현에서 바뀐 것: geny-rsi 는 xgen-agent-runtime 을 라이브러리로 import 하지 않고
+> 4.81.0 을 `xgen_rsi.base` 로 복사해 쓴다(완전 독립, 0.3.0 부터). 지금의 구조·적용 상태·실측은 [README](../README.md)와
+> [비교 보고서](reports/geny-vs-geny-rsi.md), 구현 현황은 [PLAN](PLAN.md) §4.
 
 원문: RRSI [arXiv:2609.24972](https://arxiv.org/abs/2609.24972) (v2, 코드 `google-research/rrsi` Apache-2.0), Dream-RSI [arXiv:2609.14858](https://arxiv.org/abs/2609.14858) (v1, 코드 미공개). 논문 PDF 는 라이선스상 이 저장소에 포함하지 않는다. arXiv 에서 받는다.
 
@@ -10,7 +14,7 @@
 
 1. **RRSI 와 Dream-RSI 는 층위가 다르다.** RRSI = 하네스(객체 수준) 진화를 *정규화*, Dream-RSI = 탐색 정책(메타 수준)을 *기록 재생*으로 진화. 경쟁이 아니라 보완이다. → [20](research/20-synthesis-three-methodologies.md)
 2. **우리는 이미 RRSI 를 손으로 하고 있었다.** CHANGELOG 4.27–4.75 의 Harness-Bench 설계/홀드아웃 판정, 반복 측정, "점수 비열등 + 비용 감소면 채택", "부탁보다 구조"가 RRSI 의 Analyze·분할·δ·Eq.17·헌법 4조의 정성판이다. → [15](research/15-existing-methodology.md)
-3. **교체 경계는 `AgentTurnExecutor().run(host, **kwargs)` 하나.** 운영에서 `Pipeline` 을 직접 쓰는 곳이 0건이라, 그 아래 전부를 갈아끼울 수 있다. 계약 모듈·공급자 계층은 기존 패키지를 라이브러리로 import 하고, 기존 런타임은 고치지 않는다. geny-rsi 는 같은 계약의 자체 진입점(`GenyRSITurnExecutor`)을 갖고 호스트가 고른다. → [11](research/11-runtime-io-contract.md), [32](design/32-io-compat-adapter.md)
+3. **교체 경계는 `AgentTurnExecutor().run(host, **kwargs)` 하나.** 운영에서 `Pipeline` 을 직접 쓰는 곳이 0건이라, 그 아래 전부를 갈아끼울 수 있다. 계약 모듈·공급자 계층은 (당초) 기존 패키지를 라이브러리로 import 하기로 했다가 0.3.0 에서 사본(`xgen_rsi.base`)으로 바꿨다. 기존 런타임은 고치지 않는다. geny-rsi 는 같은 계약의 자체 진입점(`GenyRSITurnExecutor`)을 갖고 호스트가 고른다. → [11](research/11-runtime-io-contract.md), [32](design/32-io-compat-adapter.md)
 4. **다중 공급자 계층(`llm_client`, 15 provider, thinking 정규화)은 그대로 재사용 가능**하다(파이프라인 객체에 논리적 비의존). s06/s07/s08 스테이지 코드는 버린다. → [12](research/12-runtime-provider-layer.md)
 5. **비용 c(τ) 를 지금 기록으로는 정확히 잴 수 없다.** 잘못된 모델로 가격 산정, $0 모델, CLI 비용 무시, 압축·증류·재시도 사용량 누락, reasoning 칸 없음. 새 커널은 모든 정책 호출을 지나는 단일 관문 원장으로 해결한다. → [12](research/12-runtime-provider-layer.md), [14](research/14-runtime-observability-records.md)
 6. **새 구조 = 고정 커널 + 𝒦 9종 타입 구성요소 하네스 + 탐색 정책.** 루프 결정은 한 곳, 측정은 커널만, 하네스 버전은 내용 주소, H 와 π_E 는 블록 좌표 상승으로 번갈아 진화. → [30](design/30-fusion-philosophy.md), [31](design/31-architecture.md)
@@ -26,6 +30,7 @@
 | # | 문서 | 내용 | 분량 |
 |---|---|---|---|
 | — | [PLAN.md](PLAN.md) | 결정 항목 + Phase 0–9 계획·종료 기준 | 196줄 |
+| 40 | [design/40-agent-self-evolution.md](design/40-agent-self-evolution.md) | **운영 구조**: 에이전트마다 H0 에서 시작해 XGEN 사용 기록으로 자기 하네스 진화 | — |
 | **논문·코드** | | | |
 | 01 | [research/01-rrsi-paper.md](research/01-rrsi-paper.md) | RRSI 요약·분석: 문제·방법·Eq.1–17·Algorithm 1·2·Table 5·실험·사례 재검산 | 258줄 |
 | 02 | [research/02-rrsi-reference-code.md](research/02-rrsi-reference-code.md) | 공식 구현 분석, 역할 프롬프트, 구조 기질, 헌법, **논문-코드 차이 D1–D18** | 317줄 |

@@ -5,7 +5,7 @@ xgen-agent-runtime 의 코드를 그대로 복사해 쓴다(import 하지 않는
 원본 버전과 파일별 해시를 남긴다. 테스트(``tests/test_base_copy.py``)는 사본이 그 기록과 같은지 본다 — 사본을 손으로
 고치면 실패하고, 고친 파일은 ``LOCAL_EDITS`` 에 이유와 함께 적어야 한다.
 
-    python tools/sync_base.py /path/to/xgen-agent-runtime/src/xgen_agent_runtime 4.80.0   # 복사 + COPY.json
+    python tools/sync_base.py /path/to/xgen-agent-runtime/src/xgen_agent_runtime 4.81.0   # 복사 + COPY.json
     python tools/sync_base.py --check                                                      # 사본이 기록과 같은가
 
 복사는 모듈 경로만 바꾼다(``xgen_agent_runtime`` → ``xgen_rsi.base``). 바꾼 뒤 ``LOCAL_EDITS`` 를 다시 적용한다.
