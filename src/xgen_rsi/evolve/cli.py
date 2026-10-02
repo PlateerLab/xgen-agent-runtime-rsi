@@ -79,6 +79,10 @@ def open_run(run_dir: str, **cfg_overrides: Any) -> Any:
         max_valid_rate_drop=cfg.max_valid_rate_drop,
         max_nosub_rise=cfg.max_nosub_rise,
     )
+    if cfg.judge is not None:
+        from xgen_rsi.evolve.judge import CriteriaJudge
+
+        domain.judge = CriteriaJudge(cfg.judge)
     return EvolveRun(domain, cfg, run_dir, start_harness=spec["harness"], name=spec["name"])
 
 

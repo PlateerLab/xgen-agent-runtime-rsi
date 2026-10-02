@@ -107,6 +107,7 @@ def run_trial(
     client_factory: Optional[Callable[[Any], Any]] = None,
     keep_content: bool = True,
     engine: str = "geny-rsi",
+    judge: Optional[Callable[..., Any]] = None,
 ) -> TrialOutcome:
     """시행 하나를 돌리고 검증한다. 결과는 ``out_dir/<task>__<trial>/outcome.json`` 에 남는다."""
     return run_attempt(
@@ -118,6 +119,7 @@ def run_trial(
         client_factory=client_factory,
         keep_content=keep_content,
         engine=engine,
+        judge=judge,
     )
 
 
@@ -152,6 +154,7 @@ def run_attempt(
     start_from: Optional[Path] = None,
     interaction_id: Optional[str] = None,
     engine: str = "geny-rsi",
+    judge: Optional[Callable[..., Any]] = None,
 ) -> TrialOutcome:
     """시도 하나 — 시행(평가)과 탐색 시도(Dream-RSI 의 셀)가 같은 함수를 쓴다.
 
@@ -254,7 +257,10 @@ def run_attempt(
     missing = bool(error) or answer.startswith(_INFRA_PREFIXES) or answer.lstrip().startswith("[ERROR]")
     if missing:
         tokens = None
-    vr = verify(task.checks, workspace=str(ws), answer=answer)
+    # 기준 판정(answer_criteria)은 판정 모델이 본다 — 이 시도에 실제로 준 요청과 함께(정제 시도면 정제 요청)
+    # 누락 시행(인프라 오류)의 글은 판정 모델에 보내지 않는다 — 어차피 r 0 이다.
+    vr = verify(task.checks, workspace=str(ws), answer=answer, judge=None if missing else judge,
+                request=task.prompt if prompt is None else prompt)
     outcome = TrialOutcome(
         task_id=task.id,
         trial=trial,
@@ -322,6 +328,7 @@ def evaluate(
     early_stop: Optional[EarlyStop] = None,
     seed: int = 7,
     engine: str = "geny-rsi",
+    judge: Optional[Callable[..., Any]] = None,
 ) -> EvalResult:
     """후보 하나를 평가한다. ``extra`` 에 valid_rate·no_submission_rate·early_stopped 등을 싣는다."""
     order: List[Tuple[TaskSpec, int]] = [(t, j) for t in tasks for j in range(k)]
@@ -357,6 +364,7 @@ def evaluate(
                     out_dir=out_dir,
                     client_factory=client_factory,
                     engine=engine,
+                    judge=judge,
                 )
                 futures[fut] = (task.id, trial)
             if not futures:

@@ -16,7 +16,7 @@ import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 @dataclass
@@ -87,6 +87,7 @@ class TrajectoryRecorder:
         explore_policy_id: Optional[str] = None,
         sink_dir: Optional[str] = None,
         keep_content: bool = False,
+        sink: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> None:
         tree_id = uuid.uuid4().hex
         self.record = TrajectoryRecord(
@@ -102,6 +103,7 @@ class TrajectoryRecorder:
             tree_id=tree_id,
         )
         self._sink_dir = sink_dir
+        self._sink = sink
         self._keep_content = keep_content
         self._seq = 0
         root = self._node(parent=None, branch=0, attempt=0, tags={"role": "root"})
@@ -177,6 +179,13 @@ class TrajectoryRecorder:
             rec.transcript = transcript
         if self._sink_dir:
             self._write()
+        if self._sink is not None:
+            try:
+                self._sink(rec.to_json())
+            except Exception:  # noqa: BLE001 — 기록이 턴을 깨지 않는다
+                import logging
+
+                logging.getLogger(__name__).warning("rsi: trajectory sink failed", exc_info=True)
         return rec
 
     def _write(self) -> None:

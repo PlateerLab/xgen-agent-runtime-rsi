@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime-rsi"
-version = "0.6.0"
+version = "0.7.0"
 description = "XGEN RSI harness — a swap-in agent harness that evolves itself with RRSI (regularized harness evolution) and Dream-RSI (replay-based exploration policy improvement)"
 readme = "README.md"
 license = "Apache-2.0"

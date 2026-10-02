@@ -115,6 +115,8 @@ class EvolveDomain:
     component_signals: Signals = ()
     max_valid_rate_drop: Optional[float] = None
     max_nosub_rise: Optional[float] = None
+    judge: Optional[Callable[..., Any]] = None
+    """기준 판정 모델(``answer_criteria`` 검사) — :class:`xgen_rsi.evolve.judge.CriteriaJudge`. 하네스 밖이다."""
 
     # ---- task sets ----------------------------------------------------------
     def evolve_ids(self) -> List[str]:

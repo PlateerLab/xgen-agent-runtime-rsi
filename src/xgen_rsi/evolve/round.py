@@ -303,6 +303,7 @@ class EvolveRun:
         return evaluate(str(hdir), list(tasks), k, policy=self.domain.policy,
                         out_dir=str(self.jobs / job), job=job, parallel=self.cfg.trial_parallel,
                         client_factory=self.domain.client_factory, early_stop=early_stop,
+                        judge=self.domain.judge,
                         seed=self.cfg.seed)
 
     # ------------------------------------------------------------- baseline --

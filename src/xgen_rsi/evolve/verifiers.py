@@ -16,6 +16,9 @@
 * ``answer_not_contains`` {text | regex}
 * ``answer_json`` {equals? | keys? | path_equals?}
 * ``answer_number`` {value, tol}
+* ``answer_criteria`` {criterion, reference?} — 판정 모델이 최종 답이 기준을 만족하는지 본다(RRSI 논문 workspace 인스턴스의
+  criteria 채점과 같은 방식). 판정 모델(``judge``)은 하네스 밖이고, 하네스는 실행 중 기준을 보지 못한다. 판정 모델이 없으면
+  실패로 기록한다. 에이전트의 사용 기록에서 만든 과제(피드백·기대 답, :mod:`xgen_rsi.usage`)가 이 검사를 쓴다.
 
 ``format: true`` 인 검사는 유효 출력(valid_output) 판정에 쓴다. ``required: true`` 인 산출물 검사가 모두 실패하고
 최종 글도 비면 미제출(no_submission)이다.
@@ -34,7 +37,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -133,7 +136,12 @@ def _parse_json_text(text: str) -> Any:
     return json.loads(t)
 
 
-def run_check(check: Mapping[str, Any], *, workspace: str, answer: str) -> CheckResult:
+#: 기준 판정 — ``judge(criterion, *, reference, request, answer) -> (passed, reason)``.
+Judge = Callable[..., Tuple[bool, str]]
+
+
+def run_check(check: Mapping[str, Any], *, workspace: str, answer: str, judge: Optional[Judge] = None,
+              request: str = "") -> CheckResult:
     kind = str(check.get("kind"))
     name = str(check.get("name") or kind)
     fmt = bool(check.get("format", False))
@@ -206,6 +214,14 @@ def run_check(check: Mapping[str, Any], *, workspace: str, answer: str) -> Check
                 return res(False, f"invalid json: {exc}")
             ok, detail = _json_checks(value, check)
             return res(ok, detail)
+        if kind == "answer_criteria":
+            if judge is None:
+                return res(False, "no judge configured")
+            if not (answer or "").strip():
+                return res(False, "empty answer")
+            ok, reason = judge(str(check["criterion"]), reference=str(check.get("reference") or ""),
+                               request=request, answer=answer)
+            return res(bool(ok), str(reason)[:500])
         if kind == "answer_number":
             nums = re.findall(r"-?\d+(?:\.\d+)?", (answer or "").replace(",", ""))
             target = float(check["value"])
@@ -216,8 +232,9 @@ def run_check(check: Mapping[str, Any], *, workspace: str, answer: str) -> Check
     return res(False, f"unknown check kind {kind!r}")
 
 
-def verify(checks: Sequence[Mapping[str, Any]], *, workspace: str, answer: str) -> VerifierResult:
-    results = tuple(run_check(c, workspace=workspace, answer=answer) for c in checks)
+def verify(checks: Sequence[Mapping[str, Any]], *, workspace: str, answer: str, judge: Optional[Judge] = None,
+           request: str = "") -> VerifierResult:
+    results = tuple(run_check(c, workspace=workspace, answer=answer, judge=judge, request=request) for c in checks)
     total = len(results)
     passed = sum(1 for r in results if r.passed)
     fmt = [r for r in results if r.format]

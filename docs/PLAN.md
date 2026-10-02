@@ -2,7 +2,7 @@
 
 > 목표: 기존 21-stage 하네스(`xgen-agent-runtime`)의 **입력·출력 인터페이스만 유지**하고, 기존 방법론 + RRSI + Dream-RSI 를 융합한 새 하네스 프레임워크를 처음부터 설계·구현한다. 다중 공급자 사용은 그대로 유지하고, 두 논문의 핵심 수식과 계산은 전부 정확히 구현한다.
 > 근거 문서: [README.md](README.md) 의 문서 지도. 원칙은 [design/30](design/30-fusion-philosophy.md), 구조는 [design/31](design/31-architecture.md).
-> 상태(2026-10-02): Phase 0–7 구현·실측 완료(방법론 실험). 운영 구조는 [design/40](design/40-agent-self-evolution.md)(에이전트마다 H0 에서 시작해 사용으로 진화) — 구현 중. 현황은 [§4](#4-구현-현황-2026-10-02-060).
+> 상태(2026-10-02): Phase 0–7 구현·실측 완료(방법론 실험). 운영 구조는 [design/40](design/40-agent-self-evolution.md)(에이전트마다 H0 에서 시작해 사용으로 진화) — 구현 중. 현황은 [§4](#4-구현-현황-2026-10-02-070).
 
 ---
 
@@ -203,7 +203,7 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 
 ---
 
-## 4. 구현 현황 (2026-10-02, 0.6.0)
+## 4. 구현 현황 (2026-10-02, 0.7.0)
 
 운영 구조는 [설계 40](design/40-agent-self-evolution.md) — **모든 Agent Geny RSI 는 H0 에서 시작하고, XGEN 안에서 에이전트마다 그 사용으로 자기
 하네스를 진화시킨다.** 패키지는 H0 만 싣는다.
@@ -217,9 +217,11 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 - RRSI·Dream: 실제 모델로 방법론 실험(보고서 §4–§6). 실험 하네스·정책은 패키지에 넣지 않는다.
 - XGEN: Agent Geny / Agent Geny RSI 두 노드, 에이전트 단위 패키지 선택(대화·화면 API·예약 작업, workflow !2049·!2050).
 
+- 설계 40 의 2단계(0.7.0): 호스트 훅 `rsi_agent_harness`·`rsi_record`, 기준 판정 검사 `answer_criteria`·`CriteriaJudge`, 사용 기록 → 과제
+  `xgen_rsi.usage`, 에이전트 진화 API `xgen_rsi.agent_evolution`(각본 모델 끝까지 테스트).
+- XGEN 쪽 동일성 결함 수정(workflow !2056).
+
 남은 것:
 
-- 설계 40 의 2~4단계 — rsi 호스트 훅(`rsi_agent_harness`·`rsi_record`)·기준 판정 검사·사용 기록 → 과제·에이전트 진화 실행 API, XGEN 저장·작업자·API,
-  Agent Geny RSI 상세 [하네스] 탭.
-- XGEN 쪽 동일성 결함(보고서 §1.2 XGEN) 수정.
+- 설계 40 의 3·4단계 — XGEN 저장·훅 구현·피드백 → 과제·진화 작업자·API, Agent Geny RSI 상세 [하네스] 탭.
 - haiku 진화 3~5 라운드·보류 분할·Dream(API 크레딧 소진으로 중단한 방법론 실험).

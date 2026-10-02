@@ -3,15 +3,20 @@
 턴 조립(호스트 계약 26단계)은 :func:`xgen_rsi.assembly.assemble_turn` 이 끝낸 상태로 :class:`TurnPlan` 이 들어온다.
 여기서는 실행 코어만 짓는다: 하네스 해석(lineage) → 구성요소 인스턴스 → 원장 클라이언트 → 엔진 → 동기 다리.
 
-관리자 설정(``host.setting``):
+하네스는 **에이전트의 것**이다(설계 40). 고르는 순서:
 
-* ``XGEN_RSI_HARNESS_DIR`` — 하네스 하나로 고정. 디렉터리 경로 또는 ``builtin:<이름>``(패키지에 든 하네스)
-* ``XGEN_RSI_LINEAGE_FILE`` — 정책 계열 → 하네스 디렉터리 표(JSON ``{"lineages": {...}}``)
+1. 관리자 고정 ``XGEN_RSI_HARNESS_DIR`` — 디렉터리 경로 또는 ``builtin:<이름>``
+2. **에이전트 하네스** — 호스트의 선택 훅 ``rsi_agent_harness()`` 가 돌려준 페이로드(:mod:`xgen_rsi.harness.payload`).
+   그 에이전트가 진화로 채택한 현재 하네스다. None 이면 아직 진화 전.
+3. ``XGEN_RSI_LINEAGE_FILE`` — 정책 계열 → 하네스 디렉터리 표(실험·재현용)
+4. 패키지 계열 표(``harnesses/lineages.json`` — H0 만) → 내장 H0
 
-둘 다 없으면 **패키지에 든 계열 표**(``harnesses/lineages.json``)로 고른다. RRSI 로 채택한 하네스는 이 저장소의
-``harnesses/`` 와 그 표에 넣어 릴리스한다 — 호스트(XGEN)는 패키지 버전을 올리면 새 하네스를 쓴다(런타임과 같은 방식).
-* ``XGEN_RSI_RECORD_DIR`` — 궤적 기록 위치(없으면 기록하지 않음)
+기록(``host.setting``·훅):
+
+* ``XGEN_RSI_RECORD_DIR`` — 궤적 기록을 파일로 남길 위치
+* 호스트의 선택 훅 ``rsi_record(record)`` — 궤적 요약을 호스트가 받는다(에이전트별 사용 기록). 기록 디렉터리와 함께 쓸 수 있다
 * ``XGEN_RSI_RECORD_CONTENT`` — 기록에 전사·최종 글까지 남김(평가 실행용, 운영 기본 끔)
+* ``XGEN_RSI_HARNESS_CACHE`` — 에이전트 하네스 페이로드를 풀어 둘 디렉터리(없으면 임시 디렉터리)
 """
 
 from __future__ import annotations
@@ -94,13 +99,29 @@ def _from_table(table_file: Path, provider: str, model: str, *, builtin: bool) -
     return (path if path.is_absolute() else table_file.resolve().parent / path), target
 
 
+def agent_harness(host: Any) -> Optional[Path]:
+    """호스트가 이 턴 에이전트의 현재 하네스를 주면(선택 훅 ``rsi_agent_harness``) 풀어 둔 디렉터리, 없으면 None."""
+    hook = getattr(host, "rsi_agent_harness", None)
+    if not callable(hook):
+        return None
+    payload = hook()
+    if not payload:
+        return None
+    from xgen_rsi.harness.payload import materialize
+
+    return materialize(payload, _setting(host, "XGEN_RSI_HARNESS_CACHE") or None)
+
+
 def resolve_harness_dir(host: Any, provider: str, model: str) -> Tuple[Path, str]:
-    """(하네스 디렉터리, 계보 이름). 순서: 고정 설정 → 계열 표 설정 → 패키지 계열 표 → 내장 H0."""
+    """(하네스 디렉터리, 계보 이름). 순서: 고정 설정 → 에이전트 하네스(호스트 훅) → 계열 표 설정 → 패키지 계열 표 → 내장 H0."""
     fixed = _setting(host, "XGEN_RSI_HARNESS_DIR")
     if fixed:
         if fixed.startswith("builtin:"):
             return builtin_harness(fixed[len("builtin:"):]), fixed
         return Path(fixed), "fixed"
+    own = agent_harness(host)
+    if own is not None:
+        return own, "agent"
     lineage_file = _setting(host, "XGEN_RSI_LINEAGE_FILE")
     if lineage_file:
         return _from_table(Path(lineage_file), provider, model, builtin=False)
@@ -334,8 +355,9 @@ class RSITurnExecutor:
             state.credentials = None
 
         record_dir = _setting(host, "XGEN_RSI_RECORD_DIR")
+        record_hook = getattr(host, "rsi_record", None)
         recorder: Optional[TrajectoryRecorder] = None
-        if record_dir:
+        if record_dir or callable(record_hook):
             recorder = TrajectoryRecorder(
                 task_id=str(getattr(plan, "interaction_id", "") or ""),
                 harness_id=version,
@@ -345,7 +367,8 @@ class RSITurnExecutor:
                 model=plan.model,
                 thinking_level=model_config.thinking_level,
                 explore_policy_id=(manifest.exploration_policy or {}).get("id") if manifest.exploration_policy else None,
-                sink_dir=record_dir,
+                sink_dir=record_dir or None,
+                sink=record_hook if callable(record_hook) else None,
                 keep_content=_truthy(_setting(host, "XGEN_RSI_RECORD_CONTENT")),
             )
             hub.subscribe(recorder.on_event)

@@ -25,6 +25,9 @@ from xgen_rsi.roles.llm import RoleModel
 from xgen_rsi.rsi_math import ModeConfig, RRSIParams
 
 ROLES = ("proposer", "critic", "analyst", "digester")
+#: 있어도 되고 없어도 되는 역할 — judge 는 기준 판정 검사(``answer_criteria``)를 채점한다(사용 기록에서 만든 과제).
+OPTIONAL_ROLES = ("judge",)
+_ALL_ROLES = ROLES + OPTIONAL_ROLES
 _PARAM_FIELDS = {f.name for f in fields(RRSIParams)}
 
 
@@ -54,6 +57,7 @@ class EvolveConfig:
     critic: Optional[RoleModel] = None
     analyst: Optional[RoleModel] = None
     digester: Optional[RoleModel] = None
+    judge: Optional[RoleModel] = None
     notes: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -101,7 +105,7 @@ class EvolveConfig:
         return self.mode_config.early_stop if self.early_stop is None else bool(self.early_stop)
 
     def role_model(self, role: str) -> Optional[RoleModel]:
-        if role not in ROLES:
+        if role not in _ALL_ROLES:
             raise KeyError(role)
         model: Optional[RoleModel] = getattr(self, role)
         return model
@@ -111,7 +115,7 @@ class EvolveConfig:
     def from_dict(cls, raw: Mapping[str, Any], **overrides: Any) -> "EvolveConfig":
         merged: Dict[str, Any] = dict(raw)
         merged.update({k: v for k, v in overrides.items() if v is not None})
-        knob_names = {f.name for f in fields(cls)} - {"params", "notes", *ROLES}
+        knob_names = {f.name for f in fields(cls)} - {"params", "notes", *_ALL_ROLES}
         params_kw: Dict[str, Any] = {}
         knobs: Dict[str, Any] = {}
         roles: Dict[str, Any] = {}
@@ -119,7 +123,7 @@ class EvolveConfig:
         role_block = merged.pop("roles", None)
         if isinstance(role_block, Mapping):
             for role, spec in role_block.items():
-                if role in ROLES and spec is not None:
+                if role in _ALL_ROLES and spec is not None:
                     roles[role] = _role(spec)
                 else:
                     notes.setdefault("roles", {})[role] = spec
@@ -128,9 +132,9 @@ class EvolveConfig:
                 params_kw[key] = value
             elif key in knob_names:
                 knobs[key] = value
-            elif key in ROLES and value is not None and not isinstance(value, str):
+            elif key in _ALL_ROLES and value is not None and not isinstance(value, str):
                 roles[key] = _role(value)
-            elif key.endswith("_model") and key[: -len("_model")] in ROLES and isinstance(value, (Mapping, RoleModel)):
+            elif key.endswith("_model") and key[: -len("_model")] in _ALL_ROLES and isinstance(value, (Mapping, RoleModel)):
                 roles[key[: -len("_model")]] = _role(value)
             else:
                 notes[key] = value
@@ -159,11 +163,11 @@ class EvolveConfig:
         """Flat JSON view for the frontier (role credentials are never written)."""
         out: Dict[str, Any] = {f.name: getattr(self.params, f.name) for f in fields(RRSIParams)}
         for f in fields(self):
-            if f.name in ("params", "notes", *ROLES):
+            if f.name in ("params", "notes", *_ALL_ROLES):
                 continue
             out[f.name] = getattr(self, f.name)
         out["early_stop_effective"] = self.use_early_stop
-        out["roles"] = {r: _redacted(getattr(self, r)) for r in ROLES if getattr(self, r) is not None}
+        out["roles"] = {r: _redacted(getattr(self, r)) for r in _ALL_ROLES if getattr(self, r) is not None}
         if self.notes:
             out["notes"] = _redact(dict(self.notes))
         return out

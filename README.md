@@ -78,8 +78,8 @@ API, 예약 작업, 고정본·복제. Agent Geny RSI 의 데이터는 처음부
 
 | 단계 | 내용 | 상태 |
 |---|---|---|
-| 1 | 패키지를 H0 만으로, 두 런타임 동일성 결함 수정, XGEN 핀 | 0.6.0 |
-| 2 | 에이전트 하네스·궤적 호스트 훅, 기준 판정 검사, 사용 기록 → 과제, 에이전트 진화 실행 API | 진행 중 |
+| 1 | 패키지를 H0 만으로, 두 런타임 동일성 결함 수정, XGEN 핀 | 0.6.0 · workflow !2056 |
+| 2 | 에이전트 하네스·궤적 호스트 훅, 기준 판정 검사, 사용 기록 → 과제, 에이전트 진화 실행 API([GUIDE §2-1](docs/GUIDE.md)) | 0.7.0 |
 | 3 | XGEN 저장·훅·피드백 → 과제·진화 작업자·API | 진행 중 |
 | 4 | Agent Geny RSI 상세 [하네스] 탭 | 진행 중 |
 
@@ -178,7 +178,7 @@ Geny 의 철학은 "에이전트 = 모델 + 요소(기억·작업·도구·앱·
 GitHub Release 의 wheel 로 설치한다(PyPI 미사용). 이 패키지 하나면 된다 — xgen-agent-runtime 은 필요 없다.
 
 ```bash
-pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.6.0/xgen_agent_runtime_rsi-0.6.0-py3-none-any.whl"
+pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.7.0/xgen_agent_runtime_rsi-0.7.0-py3-none-any.whl"
 ```
 
 ### 라이브러리로 — `PipelinePresets` 와 같은 사용감

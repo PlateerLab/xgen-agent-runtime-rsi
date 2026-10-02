@@ -62,19 +62,62 @@ out = executor.run(host, **kwargs)        # host = HostServices, kwargs = 노드
 ```
 
 턴 조립(호스트 계약)은 `xgen_rsi.assembly` 가 맡는다 — 런타임의 조립과 같은 동작의 자체 사본이고, 두 엔진이 같은 요청을
-보내는지는 동등성 테스트(각본 모델)와 재생 실험(실제 모델 응답)이 잰다. 공급자 계층·도구·계약 모듈은 런타임을 라이브러리로 쓴다.
+보내는지는 동등성 테스트(각본 모델)와 재생 실험(실제 모델 응답)이 잰다. 공급자 계층·도구·계약 모듈은 사본 `xgen_rsi.base` 다.
 
-geny-rsi 가 읽는 호스트 설정(`host.setting`):
+geny-rsi 가 쓰는 호스트 훅(선택 — 없으면 그 기능만 꺼진다):
+
+| 훅 | 뜻 |
+|---|---|
+| `rsi_agent_harness()` | 이 턴 에이전트의 **현재 하네스 페이로드**(`{"manifest", "files", "version"}`, `xgen_rsi.harness.payload`). None 이면 H0. 진화로 채택된 하네스를 호스트가 저장해 두고 돌려준다 |
+| `rsi_record(record)` | 턴마다 궤적 요약 dict(하네스 버전·계보·상태·종료 사유·도구 수·정책 토큰·읽힌 파라미터)를 받는다 — 에이전트별 사용 기록 |
+
+호스트 설정(`host.setting`):
 
 | 설정 | 뜻 |
 |---|---|
-| `XGEN_RSI_HARNESS_DIR` | 하네스 하나로 고정. 디렉터리 경로 또는 `builtin:<이름>`(패키지에 든 하네스) |
-| `XGEN_RSI_LINEAGE_FILE` | 정책 계열 → 하네스 디렉터리 표(`{"lineages": {"default": "...", "openai": "...", "anthropic:claude-sonnet": "..."}}`) |
-| (둘 다 없음) | 패키지에 든 계열 표 `harnesses/lineages.json` → 없으면 내장 H0. 채택한 하네스는 `harnesses/<이름>` + 표 항목으로 릴리스한다 |
-| `XGEN_RSI_RECORD_DIR` | 궤적 기록 위치(없으면 기록 안 함) |
+| `XGEN_RSI_HARNESS_DIR` | 모든 에이전트를 하네스 하나로 고정(관리자). 디렉터리 경로 또는 `builtin:h0`. 에이전트 하네스보다 먼저다 |
+| `XGEN_RSI_LINEAGE_FILE` | 정책 계열 → 하네스 디렉터리 표(실험·재현용, `{"lineages": {"default": "...", "openai": "..."}}`) |
+| (아무것도 없음) | 에이전트 하네스(훅) → 패키지 계열 표(H0 만) → 내장 H0 |
+| `XGEN_RSI_HARNESS_CACHE` | 에이전트 하네스 페이로드를 버전별로 풀어 둘 디렉터리(없으면 임시 디렉터리) |
+| `XGEN_RSI_RECORD_DIR` | 궤적 기록을 파일로도 남길 위치 |
 | `XGEN_RSI_RECORD_CONTENT` | 기록에 전사·최종 글 포함(평가용 — 운영 기본 끔, 개인정보) |
 
 되돌리기: 호스트가 xgen-agent-runtime 의 `AgentTurnExecutor` 로 돌아가면 된다(두 패키지는 서로 영향을 주지 않는다). 진화 중단은 `STOP` 파일.
+
+---
+
+## 2-1. 에이전트 진화 — 호스트가 에이전트마다 부르는 API
+
+설계: [설계 40](design/40-agent-self-evolution.md). 에이전트의 사용 기록을 과제로 만들고, 그 에이전트의 현재 하네스에서 RRSI 를 돌려 채택된
+하네스를 돌려준다. 채택은 RRSI 가 정한다(이 API 는 판정을 바꾸지 않는다).
+
+```python
+from xgen_rsi.agent_evolution import AgentEvolution
+from xgen_rsi.evolve.runner import PolicySpec
+from xgen_rsi.roles.llm import RoleModel
+from xgen_rsi.usage import AgentSettings, UsageItem
+
+usage = [UsageItem(id="io-123", request="...", answer="...", history=[...],
+                   stars=1, issue="데이터 오류", comment="...", expected="", criteria=[])]
+evo = AgentEvolution(work_dir, policy=PolicySpec(provider="openai", model="gpt-6-sol", api_key=key),
+                     roles={r: RoleModel(provider=..., model=..., api_key=...) for r in
+                            ("proposer", "critic", "analyst", "digester", "judge")},
+                     agent=AgentSettings(system_prompt=node_system_prompt), T=3, k=2)
+result = evo.run(usage, current=agent_current_payload_or_None)
+if result.adopted:
+    store(result.payload)      # 다음 턴부터 rsi_agent_harness() 가 이것을 돌려준다
+```
+
+| 단계 | 모듈 | 하는 일 |
+|---|---|---|
+| 과제 | `xgen_rsi.usage` | 기대 답 → "기대 답과 내용이 같다", 낮은 별점·이슈 → "보고된 문제가 없어야 한다", 높은 별점 → "받아들여진 답의 요점을 지킨다", 사용자 기준 그대로. 신호 없는 턴은 빠진다. 해시로 evolve/heldout |
+| 판정 | `answer_criteria` 검사 + `xgen_rsi.evolve.judge.CriteriaJudge` | 판정 모델이 답이 기준을 만족하는지 본다. 하네스 밖(하네스는 기준을 보지 못한다). 같은 답은 한 번만 묻는다 |
+| 진화 | `xgen_rsi.agent_evolution.AgentEvolution` | 기준선 2회 → δ → RRSI 라운드(가드 그대로) → 채택 페이로드 + 라운드별 판정 + heldout 측정(시작 vs 채택) |
+
+- 평가는 과제마다 독립 작업 공간에서 `AgentSettings.toolset`(기본 파일 도구)으로 돈다 — 사용자의 기억·파일·외부 시스템을 건드리지 않는다.
+- 자격증명은 객체로만 받고 디스크에 쓰지 않는다. `work_dir` 하나가 실행 하나이고, 같은 디렉터리로 다시 부르면 이어서 돈다. `evo.stop()` 은
+  다음 라운드 전에 멈춘다.
+- 과제가 모자라면(`min_evolve`, 기본 4) `status="not_enough_usage"` 로 끝난다.
 
 ---
 

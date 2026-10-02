@@ -86,8 +86,8 @@ user ──turn──► Agent Geny RSI ── kernel + [this agent's current ha
 
 | Stage | Content | Status |
 |---|---|---|
-| 1 | Ship H0 only, fix parity defects between the two runtimes, pin in XGEN | 0.6.0 |
-| 2 | Agent harness and trajectory host hooks, criteria checks, usage records → tasks, agent evolution API | in progress |
+| 1 | Ship H0 only, fix parity defects between the two runtimes, pin in XGEN | 0.6.0 · workflow !2056 |
+| 2 | Agent harness and trajectory host hooks, criteria checks, usage records → tasks, agent evolution API ([GUIDE §2-1, Korean](docs/GUIDE.md)) | 0.7.0 |
 | 3 | XGEN storage, hooks, feedback → tasks, evolution worker, API | in progress |
 | 4 | [Harness] tab in the Agent Geny RSI detail view | in progress |
 
@@ -192,7 +192,7 @@ memory, tasks, self-evolution or code execution.
 Install the wheel from GitHub Releases (not on PyPI). This one package is enough — xgen-agent-runtime is not needed.
 
 ```bash
-pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.6.0/xgen_agent_runtime_rsi-0.6.0-py3-none-any.whl"
+pip install "xgen-agent-runtime-rsi @ https://github.com/PlateerLab/xgen-agent-runtime-rsi/releases/download/v0.7.0/xgen_agent_runtime_rsi-0.7.0-py3-none-any.whl"
 ```
 
 ### As a library — the same feel as `PipelinePresets`
