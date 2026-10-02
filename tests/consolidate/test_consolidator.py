@@ -132,3 +132,11 @@ def test_signals_to_checks():
     acc = checks_for({"implicit": {"kind": "accept"}}, answer="good answer")
     assert acc[0]["name"] == "implicit_accept" and acc[0]["reference"] == "good answer"
     assert negative({"stars": 1}) and negative({"implicit": {"kind": "complaint"}}) and not negative({"implicit": {"kind": "accept"}})
+
+
+def test_missed_signals_are_read_by_a_later_consolidation(monkeypatch):
+    """정리가 건너뛰어진 턴의 다음 메시지 신호도 나중 정리가 읽는다(latest 없이)."""
+    worlds = _worlds(monkeypatch)
+    res = _consolidator().consolidate(ConsolidationState(), worlds, None)
+    assert res.signals["io-1"]["implicit"]["kind"] == "correction"
+    assert res.status == "adopted", res.reason

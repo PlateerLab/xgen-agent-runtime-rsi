@@ -128,6 +128,8 @@ class ConsolidationParams:
     history_rounds: int = 200
     cache_versions: int = 3
     verdict_cache: int = 4000
+    signal_pairs: int = 4
+    """한 번의 정리가 읽는 다음 메시지 신호 수(방금 끝난 턴 + 놓친 최근 쌍)."""
 
     def rrsi(self) -> RRSIParams:
         return RRSIParams(T=self.T, k=self.k, m=self.m, b_min=self.b_min, b_max=self.b_max, w=self.w,
@@ -301,11 +303,10 @@ class Consolidator:
         signals_out: Dict[str, Dict[str, Any]] = {}
         fresh_ids = {str(f) for f in fresh if str(f) in by_id}
 
-        # 1) 신호 — 방금 끝난 턴의 사용자 메시지가 앞 턴 답에 대해 말하는 것
-        if latest and latest in by_id and self.signal_llm is not None:
-            cur = by_id[latest]
-            prev = previous_in_conversation(worlds, cur)
-            if prev is not None and "implicit" not in prev.signals and prev.answer.strip() and cur.request:
+        # 1) 신호 — 사용자 메시지가 같은 대화의 앞 턴 답에 대해 말하는 것. 방금 끝난 턴(``latest``)부터, 아직 읽지 않은 최근 쌍까지
+        #    (정리가 건너뛰어지거나 다른 파드에서 턴이 끝나도 신호를 놓치지 않는다).
+        if self.signal_llm is not None:
+            for prev, cur in self._unread_pairs(worlds, latest):
                 sig = implicit_signal(self.signal_llm, request=prev.request, answer=prev.answer, next_message=cur.request)
                 prev.signals = dict(prev.signals, implicit=sig)
                 signals_out[prev.id] = dict(prev.signals)
@@ -484,6 +485,17 @@ class Consolidator:
             self._prune_cache(state, keep=[version, inc_version])
             return done("adopted", f"variant {winner.variant} adopted ({gain:+.4f})", version=version, adopted=True,
                         payload=payload, round=round_info)
+
+    def _unread_pairs(self, worlds: Sequence[TurnWorld], latest: Optional[str]) -> List[Tuple[TurnWorld, TurnWorld]]:
+        """(앞 턴, 다음 턴) 중 앞 턴의 암묵 신호를 아직 읽지 않은 것 — ``latest`` 가 먼저, 그다음 최근 순, 최대 ``signal_pairs``."""
+        pairs: List[Tuple[TurnWorld, TurnWorld]] = []
+        for cur in worlds:
+            prev = previous_in_conversation(worlds, cur)
+            if prev is None or "implicit" in prev.signals or not prev.answer.strip() or not cur.request:
+                continue
+            pairs.append((prev, cur))
+        pairs.sort(key=lambda pc: (pc[1].id != latest, -float((pc[1].data or {}).get("clock") or 0.0), -pc[1].seq))
+        return pairs[: max(0, self.params.signal_pairs)]
 
     # ── 평가 세계 ───────────────────────────────────────────────────────
     def _select_worlds(self, scored: Sequence[TurnWorld], fresh: set) -> List[TurnWorld]:
