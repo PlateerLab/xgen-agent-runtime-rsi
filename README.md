@@ -179,7 +179,7 @@ H_{t+1} = 정리(H_t, 세계 풀, 편집 이력, 신호). 채택된 H_{t+1} 이 
 
 | 이어지는 것 | 저장 | 다음 정리에서의 쓰임 |
 |---|---|---|
-| 지금 하네스와 계보 | `geny_rsi_agents.current_version`, `geny_rsi_harnesses`(버전마다 페이로드·부모·채택한 정리·요약) | 다음 정리의 출발 하네스. 되돌리기 대상 |
+| 지금 하네스와 계보 | `geny_rsi_agents.current_version`, 버전마다 `.xgr` 체크포인트(에이전트 workspace `.rsi/harness/`, MinIO)와 `geny_rsi_harnesses` 색인(부모·채택한 정리·요약) | 다음 정리의 출발 하네스. 되돌리기 대상 |
 | 세계 풀 | `geny_rsi_worlds`(에이전트당 최근 60개) | 평가 세계. 지금 버전으로 기록된 턴은 지금 하네스의 시행으로 바로 쓴다 |
 | 편집 이력 𝓛 | `geny_rsi_agents.state.records` | 제안자가 읽는 증거(거절된 방법은 다시 내지 않는다), 이미 건드린 구성요소, 가지치기 대상 𝓑_t(최근 4라운드 동안 이득이 없던 구성요소), 처음 채택 여부(ν) |
 | 라운드 번호 t·누적 이득 | `state.t`, `state.progress` | 편집 예산 b_t = 3 → 1(20라운드에 걸쳐 줄고 그 뒤 1), 정체 σ_t(지난 3라운드 채택 이득 합 ≤ δ 이면 아직 안 건드린 구성요소에 후보 자리 하나를 예약) |
@@ -194,10 +194,19 @@ H_{t+1} = 정리(H_t, 세계 풀, 편집 이력, 신호). 채택된 H_{t+1} 이 
 | 테이블 | 한 행 | 주요 칼럼 | 남기는 양 |
 |---|---|---|---|
 | `geny_rsi_agents` | 에이전트 | `current_version`(빈 값 = H0), `state`(정리 상태 JSON) | 1행 |
-| `geny_rsi_harnesses` | 채택된 버전 | `version`, `parent_version`, `payload`(manifest + 파일), `run_id`, `summary` | 전부 |
+| `geny_rsi_harnesses` | 채택된 버전 | `version`, `parent_version`, `xgr_path`·`xgr_sha`(체크포인트 파일), `run_id`, `summary` (`payload` 는 0.9.0 이전 행·파일 저장소가 없는 개발 환경만) | 전부 |
 | `geny_rsi_worlds` | 턴 하나 | `io_id`(execution_io), `interaction_id`, `seq`(대화 안 순서), `harness_version`, `model`, `world`(JSON), `signals`(JSON), `replayable` | 최근 60개 |
 | `geny_rsi_runs` | 정리 하나 | `kind`(`consolidate`), `io_id`(정리를 시작한 턴), `status`, `start_version`, `adopted_version`, `result`(라운드 요약, 페이로드 없음), `error` | 최근 200개 |
 | `geny_rsi_trajectories` | 턴 하나 | 하네스 버전·종료 사유·정책 토큰·호출 수(내용 없음) | 전부 |
+
+**하네스 체크포인트 `.xgr`** (`xgen_rsi.harness.xgr`)
+
+채택된 버전 하나를 파일 하나로 담는다. 내용은 JSON 이고 XGEN 과 geny-rsi 만 쓰는 확장자다.
+`{"format": "xgr", "format_version": 1, "version", "parent", "manifest", "files", "lineage", "created_at", "created_by"}`.
+`version` 은 manifest 와 파일 내용만으로 계산하고(부모·계보는 넣지 않는다), 읽을 때 다시 계산해 다르면 거절한다.
+XGEN 은 채택할 때 에이전트 workspace 의 `.rsi/harness/sha256-<hex>.xgr` 로 저장한다(본문은 MinIO 내용 주소 객체, 경로는 workspace 색인).
+에이전트는 이 파일을 읽을 수는 있지만 고치거나 지울 수 없다(샌드박스 발행 관문이 거절하고 러너가 되돌린다).
+턴은 DB 색인의 `xgr_sha` 로 MinIO 객체를 직접 읽으므로 workspace 의 사본이 바뀌어도 하네스는 바뀌지 않는다.
 
 **세계(`world` JSON)에 들어가는 것** — 재생에 필요한 것만.
 
