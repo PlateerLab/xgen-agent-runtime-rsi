@@ -7,6 +7,7 @@
 """
 
 from xgen_rsi.consolidate.consolidator import (
+    ConsolidationError,
     ConsolidationParams,
     ConsolidationResult,
     ConsolidationState,
@@ -16,5 +17,5 @@ from xgen_rsi.consolidate.replay import ReplayResult, replay_world
 from xgen_rsi.consolidate.signals import checks_for, implicit_signal
 from xgen_rsi.consolidate.world import TurnWorld
 
-__all__ = ["ConsolidationParams", "ConsolidationResult", "ConsolidationState", "Consolidator", "ReplayResult", "TurnWorld",
+__all__ = ["ConsolidationError", "ConsolidationParams", "ConsolidationResult", "ConsolidationState", "Consolidator", "ReplayResult", "TurnWorld",
            "checks_for", "implicit_signal", "replay_world"]
