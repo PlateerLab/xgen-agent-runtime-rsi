@@ -169,6 +169,19 @@ class ConsolidationState:
                    verdicts=dict(raw.get("verdicts") or {}))
 
 
+class ConsolidationError(RuntimeError):
+    """신호를 읽은 뒤 정리가 실패했다.
+
+    호스트는 ``signals`` 를 저장해 같은 신호를 다시 읽지 않고(같은 모델 호출을 되풀이하지 않는다), ``fresh`` 의 세계는 다음 정리에서
+    다시 새 신호로 넘겨 라운드를 놓치지 않게 한다. 정리 상태는 중간에 바뀌었을 수 있으니 저장하지 않는다.
+    """
+
+    def __init__(self, message: str, *, signals: Mapping[str, Mapping[str, Any]], fresh: Any) -> None:
+        super().__init__(message)
+        self.signals: Dict[str, Dict[str, Any]] = {str(k): dict(v) for k, v in (signals or {}).items()}
+        self.fresh: List[str] = sorted(str(x) for x in (fresh or ()))
+
+
 @dataclass
 class ConsolidationResult:
     status: str
@@ -263,7 +276,6 @@ class Consolidator:
         self.judge = judge
         self.signal_llm = signal_llm if signal_llm is not None else getattr(judge, "llm", None)
         self._verdict_lock = threading.Lock()
-        self._git_lock = threading.Lock()
 
     # ── 공용 ────────────────────────────────────────────────────────────
     def log(self, msg: str) -> None:
@@ -318,173 +330,175 @@ class Consolidator:
         from xgen_rsi.harness.spec import load_manifest
         from xgen_rsi.kernel.executor import BUILTIN_H0
 
-        with tempfile.TemporaryDirectory(prefix="rsi-consolidate-") as tmp:
-            tmpdir = Path(tmp)
-            inc_dir = materialize(current, tmpdir / "harness-cache") if current else BUILTIN_H0
-            inc_manifest = load_manifest(inc_dir)
-            inc_version = inc_manifest.version_id()
+        try:
+            with tempfile.TemporaryDirectory(prefix="rsi-consolidate-") as tmp:
+                tmpdir = Path(tmp)
+                inc_dir = materialize(current, tmpdir / "harness-cache") if current else BUILTIN_H0
+                inc_manifest = load_manifest(inc_dir)
+                inc_version = inc_manifest.version_id()
 
-            def done(status: str, reason: str, **kw: Any) -> ConsolidationResult:
-                res = ConsolidationResult(status=status, reason=reason, state=state, start_version=inc_version,
-                                          version=kw.pop("version", inc_version), signals=signals_out, **kw)
-                res.seconds = round(time.monotonic() - started, 3)
-                self.log(f"{status}: {reason} ({res.seconds}s)")
-                return res
+                def done(status: str, reason: str, **kw: Any) -> ConsolidationResult:
+                    res = ConsolidationResult(status=status, reason=reason, state=state, start_version=inc_version,
+                                              version=kw.pop("version", inc_version), signals=signals_out, **kw)
+                    res.seconds = round(time.monotonic() - started, 3)
+                    self.log(f"{status}: {reason} ({res.seconds}s)")
+                    return res
 
-            # 2) 평가 세계
-            checks = {w.id: checks_for(w.signals, answer=w.answer) for w in worlds if w.replayable}
-            scored = [w for w in worlds if w.replayable and checks.get(w.id)]
-            if not scored:
-                return done("recorded", "no turn has a signal to learn from yet")
-            hist_path = tmpdir / "history.jsonl"
-            from xgen_rsi.evolve.history import History
+                # 2) 평가 세계
+                checks = {w.id: checks_for(w.signals, answer=w.answer) for w in worlds if w.replayable}
+                scored = [w for w in worlds if w.replayable and checks.get(w.id)]
+                if not scored:
+                    return done("recorded", "no turn has a signal to learn from yet")
+                hist_path = tmpdir / "history.jsonl"
+                from xgen_rsi.evolve.history import History
 
-            history = History(hist_path)
-            history.rewrite(state.records)
-            t = int(state.t)
-            prune = history.prune_set(t, self.params.n_prune)
-            fresh_scored = [w for w in scored if w.id in fresh_ids]
-            fresh_negative = [w for w in fresh_scored if negative(w.signals)]
-            if not fresh_negative:
-                # 라운드는 새 증거가 열고(RRSI 의 라운드 = 새 측정), 가지치기 대상 𝓑_t 는 그 라운드의 제안 입력이다.
-                return done("recorded", "no new correction or problem to fix" if not fresh_scored else
-                            "new signals only confirm the current answers")
-            W = self._select_worlds(scored, fresh_ids)
-            if stop():
-                return done("recorded", "stopped")
+                history = History(hist_path)
+                history.rewrite(state.records)
+                t = int(state.t)
+                prune = history.prune_set(t, self.params.n_prune)
+                fresh_scored = [w for w in scored if w.id in fresh_ids]
+                fresh_negative = [w for w in fresh_scored if negative(w.signals)]
+                if not fresh_negative:
+                    # 라운드는 새 증거가 열고(RRSI 의 라운드 = 새 측정), 가지치기 대상 𝓑_t 는 그 라운드의 제안 입력이다.
+                    return done("recorded", "no new correction or problem to fix" if not fresh_scored else
+                                "new signals only confirm the current answers")
+                W = self._select_worlds(scored, fresh_ids)
+                if stop():
+                    return done("recorded", "stopped")
 
-            # 3) 지금 하네스를 W 에서 잰다
-            judged = self._judge_cached(state)
-            have = self._incumbent_have(state, inc_version, W)
-            inc_ev, inc_trials = self._evaluate("incumbent", inc_dir, W, checks, have, judged, early=None, stop=stop)
-            self._remember(state, inc_version, inc_trials)
-            if not valid_measurement(inc_ev, self.params.invalid_missing_frac):
-                return done("failed", f"the current harness could not be replayed ({inc_ev.missing}/{inc_ev.n_expected} trials failed)",
-                            round={"t": t, "worlds": [w.id for w in W], "incumbent": _ev_brief(inc_ev)})
-            failing = [w for w in W if inc_ev.per_task[w.id].mean < 1.0 - 1e-9]
-            if not failing:
-                return done("kept", "the current harness already meets every criterion on these turns",
-                            round={"t": t, "worlds": [w.id for w in W], "incumbent": _ev_brief(inc_ev)})
-            unit = 1.0 / max(1.0, sum(sum(tr.weights) for tr in inc_ev.per_task.values()))
-            cal = calibrate([inc_ev], z=self.params.delta_z)
-            delta = max(float(cal.delta), unit)
-            S_star = float(inc_ev.S)
+                # 3) 지금 하네스를 W 에서 잰다
+                judged = self._judge_cached(state)
+                have = self._incumbent_have(state, inc_version, W)
+                inc_ev, inc_trials = self._evaluate("incumbent", inc_dir, W, checks, have, judged, early=None, stop=stop)
+                self._remember(state, inc_version, inc_trials)
+                if not valid_measurement(inc_ev, self.params.invalid_missing_frac):
+                    return done("failed", f"the current harness could not be replayed ({inc_ev.missing}/{inc_ev.n_expected} trials failed)",
+                                round={"t": t, "worlds": [w.id for w in W], "incumbent": _ev_brief(inc_ev)})
+                failing = [w for w in W if inc_ev.per_task[w.id].mean < 1.0 - 1e-9]
+                if not failing:
+                    return done("kept", "the current harness already meets every criterion on these turns",
+                                round={"t": t, "worlds": [w.id for w in W], "incumbent": _ev_brief(inc_ev)})
+                unit = 1.0 / max(1.0, sum(sum(tr.weights) for tr in inc_ev.per_task.values()))
+                cal = calibrate([inc_ev], z=self.params.delta_z)
+                delta = max(float(cal.delta), unit)
+                S_star = float(inc_ev.S)
 
-            # 4) 라운드 — 지시(b_t, σ_t, 𝒰_t, 𝓑_t)
-            p = self.params
-            budget = edit_budget(min(t, p.T), p.T, p.b_min, p.b_max)
-            sigma = stall_flag(list(state.progress), t, p.w, delta)
-            enabled = [k for k in K_ENABLED_XGEN if k in inc_manifest.enabled_kinds]
-            tried_set = history.tried(before_t=t)
-            expl = exploration(sigma, tried_set, p.m_draft, enabled=enabled)
-            from xgen_rsi.evolve.round import exploration_directive
+                # 4) 라운드 — 지시(b_t, σ_t, 𝒰_t, 𝓑_t)
+                p = self.params
+                budget = edit_budget(min(t, p.T), p.T, p.b_min, p.b_max)
+                sigma = stall_flag(list(state.progress), t, p.w, delta)
+                enabled = [k for k in K_ENABLED_XGEN if k in inc_manifest.enabled_kinds]
+                tried_set = history.tried(before_t=t)
+                expl = exploration(sigma, tried_set, p.m_draft, enabled=enabled)
+                from xgen_rsi.evolve.round import exploration_directive
 
-            explore = exploration_directive(expl)
-            reserved = reserved_variants(p.m, p.m_draft, sigma, expl.untried)
-            self.log(f"round t={t} worlds={len(W)} failing={len(failing)} S={inc_ev.S:.4f} delta={delta:.4f} "
-                     f"b_t={budget} sigma={sigma} prune={[x['component'] for x in prune]}")
+                explore = exploration_directive(expl)
+                reserved = reserved_variants(p.m, p.m_draft, sigma, expl.untried)
+                self.log(f"round t={t} worlds={len(W)} failing={len(failing)} S={inc_ev.S:.4f} delta={delta:.4f} "
+                         f"b_t={budget} sigma={sigma} prune={[x['component'] for x in prune]}")
 
-            views = {w.id: self._view(w, inc_trials.get(w.id) or [], worst=w in failing) for w in W}
-            report = self._analyze(state, views, inc_ev)
-            if stop():
-                return done("recorded", "stopped")
+                views = {w.id: self._view(w, inc_trials.get(w.id) or [], worst=w in failing) for w in W}
+                report = self._analyze(state, views, inc_ev)
+                if stop():
+                    return done("recorded", "stopped")
 
-            from xgen_rsi.evolve.gitops import HarnessRepo
+                from xgen_rsi.consolidate.drafts import DraftSpace
 
-            repo = HarnessRepo(tmpdir / "repo")
-            repo.init(inc_dir, "evolve/agent")
-            skill_md = (CONSTITUTION_DIR / "SKILL.md").read_text(encoding="utf-8")
-            from xgen_rsi.evolve.domain import CONSTITUTION_DIR as EVOLVE_CONSTITUTION
+                space = DraftSpace(tmpdir / "drafts", inc_dir)
+                skill_md = (CONSTITUTION_DIR / "SKILL.md").read_text(encoding="utf-8")
+                from xgen_rsi.evolve.domain import CONSTITUTION_DIR as EVOLVE_CONSTITUTION
 
-            patterns_md = (EVOLVE_CONSTITUTION / "PATTERNS.md").read_text(encoding="utf-8")
-            ctx = {
-                "t": t, "budget": budget, "explore": explore, "prune": prune, "report": report, "views": views,
-                "inc_ev": inc_ev, "inc_manifest": inc_manifest, "enabled": enabled, "hist_rows": history.render(),
-                "skill_md": skill_md, "patterns_md": patterns_md, "patterns": self._critic_patterns(worlds),
-                "selection": self._selection_text(S_star, delta, inc_ev, enabled), "scoreboard": state.scoreboard[-20:],
-                "tmp": tmpdir,
-            }
-            drafts: List[_Draft] = []
-            with ThreadPoolExecutor(max_workers=max(1, p.m)) as ex:
-                futs = [ex.submit(self._draft, repo, VARIANT_LABELS[v], v in reserved, ctx) for v in range(p.m)]
-                drafts = [f.result() for f in futs]
-            if stop():
-                return done("recorded", "stopped")
+                patterns_md = (EVOLVE_CONSTITUTION / "PATTERNS.md").read_text(encoding="utf-8")
+                ctx = {
+                    "t": t, "budget": budget, "explore": explore, "prune": prune, "report": report, "views": views,
+                    "inc_ev": inc_ev, "inc_manifest": inc_manifest, "enabled": enabled, "hist_rows": history.render(),
+                    "skill_md": skill_md, "patterns_md": patterns_md, "patterns": self._critic_patterns(worlds),
+                    "selection": self._selection_text(S_star, delta, inc_ev, enabled), "scoreboard": state.scoreboard[-20:],
+                    "tmp": tmpdir,
+                }
+                drafts: List[_Draft] = []
+                with ThreadPoolExecutor(max_workers=max(1, p.m)) as ex:
+                    futs = [ex.submit(self._draft, space, VARIANT_LABELS[v], v in reserved, ctx) for v in range(p.m)]
+                    drafts = [f.result() for f in futs]
+                if stop():
+                    return done("recorded", "stopped")
 
-            # 5) 재생 평가 — 후보끼리도 동시에(각 후보는 자기 조기 종료를 따로 본다)
-            live = [d for d in drafts if d.gate_failure is None and d.hdir is not None]
+                # 5) 재생 평가 — 후보끼리도 동시에(각 후보는 자기 조기 종료를 따로 본다)
+                live = [d for d in drafts if d.gate_failure is None and d.hdir is not None]
 
-            def measure(d: _Draft) -> None:
-                es = {"S_star": S_star, "delta": delta, "S_inc": inc_ev.S} if p.early_stop else None
-                ev, trials = self._evaluate(f"r{t}{d.variant}", d.hdir, W, checks, {}, judged, early=es, stop=stop)  # type: ignore[arg-type]
-                if not valid_measurement(ev, p.invalid_missing_frac) and not ev.extra.get("early_stopped"):
-                    d.gate_failure, d.detail = "eval_invalid", f"{ev.missing}/{ev.n_expected} replays failed"
-                    return
-                touched_params = [a for a in d.touched if ".params." in a]
-                ev = EvalResult(job=ev.job, k=ev.k, per_task=ev.per_task, S=ev.S, C=ev.C, n_expected=ev.n_expected,
-                                missing=ev.missing, extra=dict(ev.extra, touched_params=touched_params))
-                d.ev, d.trials = ev, trials
-                if ev.extra.get("early_stopped"):
-                    d.early = dict(ev.extra.get("early_stop") or {})
+                def measure(d: _Draft) -> None:
+                    es = {"S_star": S_star, "delta": delta, "S_inc": inc_ev.S} if p.early_stop else None
+                    ev, trials = self._evaluate(f"r{t}{d.variant}", d.hdir, W, checks, {}, judged, early=es, stop=stop)  # type: ignore[arg-type]
+                    if not valid_measurement(ev, p.invalid_missing_frac) and not ev.extra.get("early_stopped"):
+                        d.gate_failure, d.detail = "eval_invalid", f"{ev.missing}/{ev.n_expected} replays failed"
+                        return
+                    touched_params = [a for a in d.touched if ".params." in a]
+                    ev = EvalResult(job=ev.job, k=ev.k, per_task=ev.per_task, S=ev.S, C=ev.C, n_expected=ev.n_expected,
+                                    missing=ev.missing, extra=dict(ev.extra, touched_params=touched_params))
+                    d.ev, d.trials = ev, trials
+                    if ev.extra.get("early_stopped"):
+                        d.early = dict(ev.extra.get("early_stop") or {})
 
-            if live:
-                with ThreadPoolExecutor(max_workers=len(live)) as ex:
-                    list(ex.map(measure, live))
+                if live:
+                    with ThreadPoolExecutor(max_workers=len(live)) as ex:
+                        list(ex.map(measure, live))
 
-            # 6) 선택
-            counts = history.accepted_counts(before_t=t)
-            cands = [Candidate(d.variant, d.edits, d.ev, d.gate_failure if d.ev is None else None, d.detail, d.commit) for d in drafts]
-            from xgen_rsi.evolve.round import exercised_guard
+                # 6) 선택
+                counts = history.accepted_counts(before_t=t)
+                cands = [Candidate(d.variant, d.edits, d.ev, d.gate_failure if d.ev is None else None, d.detail, d.commit) for d in drafts]
+                from xgen_rsi.evolve.round import exercised_guard
 
-            guard = rate_guard(p.max_valid_rate_drop, p.max_nosub_rise, valid_key="valid_rate", nosub_key="no_submission_rate")
+                guard = rate_guard(p.max_valid_rate_drop, p.max_nosub_rise, valid_key="valid_rate", nosub_key="no_submission_rate")
 
-            def guard_fn(inc: EvalResult, cand: EvalResult) -> List[str]:
-                return list(guard(inc, cand)) + exercised_guard(cand)
+                def guard_fn(inc: EvalResult, cand: EvalResult) -> List[str]:
+                    return list(guard(inc, cand)) + exercised_guard(cand)
 
-            winner_c, decisions = select_round(cands, inc_ev, S_star, delta, p.rrsi(), counts, guard_fn, tie="xgen", enabled=enabled)
-            winner = next((d for d in drafts if winner_c is not None and d.variant == winner_c.variant), None)
+                winner_c, decisions = select_round(cands, inc_ev, S_star, delta, p.rrsi(), counts, guard_fn, tie="xgen", enabled=enabled)
+                winner = next((d for d in drafts if winner_c is not None and d.variant == winner_c.variant), None)
 
-            # 7) 이력·상태
-            cand_rows = []
-            for d, c, dec in zip(drafts, cands, decisions):
-                outcome = outcome_of(c, c if winner is d else None, dec)
-                if d.ev is None:
-                    history.append_candidate(t, d.variant, d.edits, outcome, None, None, False, None, None,
-                                             d.diff[:4000] or None, d.detail)
-                else:
-                    dS = dec.delta_S
-                    if d.early is not None:
-                        dS = float(d.early.get("delta_S", dS or 0.0))
-                    history.append_candidate(t, d.variant, d.edits, outcome, dS, dec.delta_C, outcome == "ACCEPTED",
-                                             dec.S, dec.C, d.diff[:4000] or None, dec.reason,
-                                             early_stopped=d.early is not None, delta_C_partial=d.early is not None)
-                    self._attribute(state, t, d, inc_ev)
-                cand_rows.append({"variant": d.variant, "outcome": outcome, "reason": dec.reason, "reason_code": dec.reason_code,
-                                  "S": dec.S, "delta_S": dec.delta_S, "delta_C": dec.delta_C, "mechanism": d.mechanism[:300],
-                                  "components": [e.get("component") for e in d.edits], "early_stopped": d.early is not None,
-                                  "detail": (d.detail or "")[:300]})
-            gain = float(next((dec.delta_S or 0.0) for dec in decisions if winner is not None and dec.variant == winner.variant)) if winner else 0.0
-            state.records = _trim_rounds(history.records(), t, p.history_rounds)
-            state.progress = list(state.progress[: t + 1]) + [0.0] * max(0, t + 1 - len(state.progress))
-            state.progress.append(state.progress[t] + max(0.0, gain))
-            state.t = t + 1
-            round_info = {
-                "t": t, "b_t": budget, "sigma": sigma, "delta": delta, "S_star": S_star, "worlds": [w.id for w in W],
-                "failing": [w.id for w in failing], "fresh": sorted(fresh_ids & {w.id for w in W}),
-                "prune": [x.get("component") for x in prune], "incumbent": _ev_brief(inc_ev),
-                "candidates": cand_rows, "winner": winner.variant if winner else None,
-                "failure_modes": [m.get("mode") for m in (report.get("failure_modes") or [])[:5]],
-            }
-            if winner is None or winner.hdir is None:
-                return done("kept", "no candidate beat the current harness under the RRSI rules", round=round_info)
-            from xgen_rsi.harness.payload import to_payload
+                # 7) 이력·상태
+                cand_rows = []
+                for d, c, dec in zip(drafts, cands, decisions):
+                    outcome = outcome_of(c, c if winner is d else None, dec)
+                    if d.ev is None:
+                        history.append_candidate(t, d.variant, d.edits, outcome, None, None, False, None, None,
+                                                 d.diff[:4000] or None, d.detail)
+                    else:
+                        dS = dec.delta_S
+                        if d.early is not None:
+                            dS = float(d.early.get("delta_S", dS or 0.0))
+                        history.append_candidate(t, d.variant, d.edits, outcome, dS, dec.delta_C, outcome == "ACCEPTED",
+                                                 dec.S, dec.C, d.diff[:4000] or None, dec.reason,
+                                                 early_stopped=d.early is not None, delta_C_partial=d.early is not None)
+                        self._attribute(state, t, d, inc_ev)
+                    cand_rows.append({"variant": d.variant, "outcome": outcome, "reason": dec.reason, "reason_code": dec.reason_code,
+                                      "S": dec.S, "delta_S": dec.delta_S, "delta_C": dec.delta_C, "mechanism": d.mechanism[:300],
+                                      "components": [e.get("component") for e in d.edits], "early_stopped": d.early is not None,
+                                      "detail": (d.detail or "")[:300]})
+                gain = float(next((dec.delta_S or 0.0) for dec in decisions if winner is not None and dec.variant == winner.variant)) if winner else 0.0
+                state.records = _trim_rounds(history.records(), t, p.history_rounds)
+                state.progress = list(state.progress[: t + 1]) + [0.0] * max(0, t + 1 - len(state.progress))
+                state.progress.append(state.progress[t] + max(0.0, gain))
+                state.t = t + 1
+                round_info = {
+                    "t": t, "b_t": budget, "sigma": sigma, "delta": delta, "S_star": S_star, "worlds": [w.id for w in W],
+                    "failing": [w.id for w in failing], "fresh": sorted(fresh_ids & {w.id for w in W}),
+                    "prune": [x.get("component") for x in prune], "incumbent": _ev_brief(inc_ev),
+                    "candidates": cand_rows, "winner": winner.variant if winner else None,
+                    "failure_modes": [m.get("mode") for m in (report.get("failure_modes") or [])[:5]],
+                }
+                if winner is None or winner.hdir is None:
+                    return done("kept", "no candidate beat the current harness under the RRSI rules", round=round_info)
+                from xgen_rsi.harness.payload import to_payload
 
-            payload = to_payload(winner.hdir)
-            version = str(payload["version"])
-            self._remember(state, version, winner.trials)  # 채택 하네스의 재생 = 다음 정리의 지금 하네스 시행
-            self._prune_cache(state, keep=[version, inc_version])
-            return done("adopted", f"variant {winner.variant} adopted ({gain:+.4f})", version=version, adopted=True,
-                        payload=payload, round=round_info)
+                payload = to_payload(winner.hdir)
+                version = str(payload["version"])
+                self._remember(state, version, winner.trials)  # 채택 하네스의 재생 = 다음 정리의 지금 하네스 시행
+                self._prune_cache(state, keep=[version, inc_version])
+                return done("adopted", f"variant {winner.variant} adopted ({gain:+.4f})", version=version, adopted=True,
+                            payload=payload, round=round_info)
+        except Exception as exc:  # noqa: BLE001 (신호를 읽은 뒤의 실패는 읽은 신호와 라운드를 못 탄 세계를 싣고 올린다)
+            raise ConsolidationError(f"{type(exc).__name__}: {exc}", signals=signals_out, fresh=fresh_ids) from exc
 
     def _unread_pairs(self, worlds: Sequence[TurnWorld], latest: Optional[str]) -> List[Tuple[TurnWorld, TurnWorld]]:
         """(앞 턴, 다음 턴) 중 앞 턴의 암묵 신호를 아직 읽지 않은 것 — ``latest`` 가 먼저, 그다음 최근 순, 최대 ``signal_pairs``."""
@@ -732,7 +746,7 @@ class Consolidator:
         return report
 
     # ── 후보 ────────────────────────────────────────────────────────────
-    def _draft(self, repo: Any, vid: str, reserved: bool, ctx: Mapping[str, Any]) -> _Draft:
+    def _draft(self, space: Any, vid: str, reserved: bool, ctx: Mapping[str, Any]) -> _Draft:
         from xgen_rsi.evolve.critic import review
         from xgen_rsi.evolve.propose import propose
         from xgen_rsi.evolve.tagging import normalize_edits, touched
@@ -741,13 +755,9 @@ class Consolidator:
 
         p = self.params
         t = int(ctx["t"])
-        branch = f"agent/r{t}{vid}"
-        wt = Path(ctx["tmp"]) / "wt" / vid
         d = _Draft(vid)
         try:
-            with self._git_lock:
-                repo.worktree_new_branch(wt, branch, "evolve/agent")
-            hdir = repo.harness_dir(wt)
+            hdir = space.new_draft(vid)
             inc_manifest = ctx["inc_manifest"]
             explore = ctx["explore"]
             untried = list(explore.get("untried") or [])
@@ -770,8 +780,7 @@ class Consolidator:
                 return d
             verdict: Dict[str, Any] = {}
             for attempt in range(1 + p.repair_rounds):
-                with self._git_lock:
-                    diff = repo.diff_with_new_files(wt)
+                diff = space.diff(hdir)
                 verdict = review(self.roles.critic, diff, str(prop.get("mechanism") or ""), str(prop.get("targets_mode") or ""),
                                  edits=prop.get("edits"), patterns=ctx["patterns"], brief=BRIEFS["critic"])
                 if verdict.get("verdict") == "accept":
@@ -793,16 +802,15 @@ class Consolidator:
                     break
             d.edits = list(prop.get("edits") or [])
             d.mechanism = str(prop.get("mechanism") or "")
-            with self._git_lock:
-                d.diff = repo.diff_with_new_files(wt)
+            d.diff = space.diff(hdir)
             if verdict.get("verdict") != "accept":
                 d.gate_failure, d.detail = "critic_reject", str(verdict.get("reasons"))[:600]
                 return d
             ts = touched(inc_manifest, load_manifest(hdir))
             d.edits = normalize_edits(d.edits, ts, ())
             d.touched = list(ts.addresses)
-            with self._git_lock:
-                d.commit = repo.commit(wt, f"r{t}{vid}: {d.mechanism[:120]}")
+            # 후보의 식별자는 내용 버전이다(예전 git 커밋은 아무도 읽지 않았다)
+            d.commit = load_manifest(hdir).version_id()
             try:
                 instantiate(load_manifest(hdir))
             except Exception as exc:  # noqa: BLE001 — 적재 확인(선택 규칙이 아니라 살아 있는가)

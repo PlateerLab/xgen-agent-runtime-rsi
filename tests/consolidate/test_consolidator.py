@@ -140,3 +140,37 @@ def test_missed_signals_are_read_by_a_later_consolidation(monkeypatch):
     res = _consolidator().consolidate(ConsolidationState(), worlds, None)
     assert res.signals["io-1"]["implicit"]["kind"] == "correction"
     assert res.status == "adopted", res.reason
+
+
+def test_consolidation_runs_without_git(monkeypatch):
+    """XGEN 워크플로 서버에는 git 이 없다. 정리는 git 없이 후보를 만들고 채택까지 가야 한다."""
+    import subprocess
+
+    real_run = subprocess.run
+
+    def no_git(args, *a, **kw):
+        if isinstance(args, (list, tuple)) and args and args[0] == "git":
+            raise FileNotFoundError(2, "No such file or directory", "git")
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+    res = _consolidator().consolidate(ConsolidationState(), _worlds(monkeypatch), None, latest="io-2")
+    assert res.status == "adopted", res.reason
+    assert res.round["candidates"][0].get("gate_failure") in (None, "")
+
+
+def test_failure_after_reading_signals_hands_them_to_the_host(monkeypatch):
+    """신호를 읽은 뒤 실패하면 읽은 신호와 라운드를 못 탄 세계를 예외에 싣는다(호스트가 저장하고 다음 정리에서 다시 돌린다)."""
+    import pytest
+
+    from xgen_rsi.consolidate import ConsolidationError, drafts
+
+    def broken(self, root, incumbent):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(drafts.DraftSpace, "__init__", broken)
+    with pytest.raises(ConsolidationError) as err:
+        _consolidator().consolidate(ConsolidationState(), _worlds(monkeypatch), None, latest="io-2")
+    assert err.value.signals["io-1"]["implicit"]["kind"] == "correction"
+    assert err.value.fresh == ["io-1"]
+    assert "OSError: disk full" in str(err.value)
