@@ -176,10 +176,13 @@ class ConsolidationError(RuntimeError):
     다시 새 신호로 넘겨 라운드를 놓치지 않게 한다. 정리 상태는 중간에 바뀌었을 수 있으니 저장하지 않는다.
     """
 
-    def __init__(self, message: str, *, signals: Mapping[str, Mapping[str, Any]], fresh: Any) -> None:
+    def __init__(self, message: str, *, signals: Mapping[str, Mapping[str, Any]], fresh: Any,
+                 usage: Optional[Mapping[str, Any]] = None) -> None:
         super().__init__(message)
         self.signals: Dict[str, Dict[str, Any]] = {str(k): dict(v) for k, v in (signals or {}).items()}
         self.fresh: List[str] = sorted(str(x) for x in (fresh or ()))
+        #: 실패하기까지 부른 모델 호출의 합(``ConsolidationResult.usage`` 와 같은 모양). 실패해도 비용은 났다.
+        self.usage: Dict[str, Any] = dict(usage or {})
 
 
 @dataclass
@@ -197,6 +200,9 @@ class ConsolidationResult:
     """이번 정리가 새로 읽은 신호(세계 id → 그 세계의 신호 전체)."""
     seconds: float = 0.0
     usage: Dict[str, Any] = field(default_factory=dict)
+    """이번 정리가 부른 모델 호출의 합: ``{input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, calls,
+    provider, model, by_part: {replay|proposer|critic|analyst|judge|signal: 같은 네 값과 calls}}``. 값은 공급자 usage 정의 그대로다
+    (Anthropic 계열은 캐시분이 input 밖에 따로 있다). 캐시에서 다시 읽은 시행·판정은 이번에 부른 것이 아니라 들어가지 않는다."""
 
     def summary(self) -> Dict[str, Any]:
         """호스트 기록용(상태·페이로드 제외)."""
@@ -276,6 +282,44 @@ class Consolidator:
         self.judge = judge
         self.signal_llm = signal_llm if signal_llm is not None else getattr(judge, "llm", None)
         self._verdict_lock = threading.Lock()
+        # 정리 한 번의 재생 비용(병렬 재생이 더한다). consolidate 가 시작할 때 비운다.
+        self._usage_lock = threading.Lock()
+        self._replay_usage: Dict[str, int] = {}
+
+    def _role_ledgers(self) -> List[Tuple[str, Any]]:
+        """역할 호출이 쌓이는 원장들(같은 원장은 한 번만). 원장이 없는 맞춤 역할은 건너뛴다."""
+        seen: set = set()
+        out: List[Tuple[str, Any]] = []
+        named = [("proposer", getattr(self.roles, "proposer", None)), ("critic", getattr(self.roles, "critic", None)),
+                 ("analyst", getattr(self.roles, "analyst", None)), ("judge", getattr(self.judge, "llm", None)),
+                 ("signal", self.signal_llm)]
+        for name, llm in named:
+            ledger = getattr(llm, "ledger", None)
+            if ledger is None or not hasattr(ledger, "records") or id(ledger) in seen:
+                continue
+            seen.add(id(ledger))
+            out.append((name, ledger))
+        return out
+
+    def _usage_since(self, marks: Mapping[int, int]) -> Dict[str, Any]:
+        """``marks``(원장 id → 시작 때 기록 수) 이후 역할 호출 + 이번 재생의 합."""
+        from xgen_rsi.kernel.ledger import add_usage, usage_totals
+
+        by_part: Dict[str, Dict[str, int]] = {}
+        with self._usage_lock:
+            if self._replay_usage.get("calls") or self._replay_usage.get("input_tokens"):
+                by_part["replay"] = dict(self._replay_usage)
+        for name, ledger in self._role_ledgers():
+            part = usage_totals(list(ledger.records)[int(marks.get(id(ledger), 0)):])
+            if part["calls"] or part["input_tokens"] or part["output_tokens"]:
+                by_part[name] = part
+        total: Dict[str, int] = {}
+        for part in by_part.values():
+            add_usage(total, part)
+        if not total:
+            return {}
+        return {**total, "provider": str(getattr(self.policy, "provider", "") or ""),
+                "model": str(getattr(self.policy, "model", "") or ""), "by_part": by_part}
 
     # ── 공용 ────────────────────────────────────────────────────────────
     def log(self, msg: str) -> None:
@@ -311,6 +355,9 @@ class Consolidator:
         started = time.monotonic()
         state = state or ConsolidationState()
         stop = stop or (lambda: False)
+        with self._usage_lock:
+            self._replay_usage = {}
+        marks = {id(ledger): len(ledger.records) for _, ledger in self._role_ledgers()}
         by_id = {w.id: w for w in worlds}
         signals_out: Dict[str, Dict[str, Any]] = {}
         fresh_ids = {str(f) for f in fresh if str(f) in by_id}
@@ -341,6 +388,7 @@ class Consolidator:
                     res = ConsolidationResult(status=status, reason=reason, state=state, start_version=inc_version,
                                               version=kw.pop("version", inc_version), signals=signals_out, **kw)
                     res.seconds = round(time.monotonic() - started, 3)
+                    res.usage = self._usage_since(marks)
                     self.log(f"{status}: {reason} ({res.seconds}s)")
                     return res
 
@@ -498,7 +546,8 @@ class Consolidator:
                 return done("adopted", f"variant {winner.variant} adopted ({gain:+.4f})", version=version, adopted=True,
                             payload=payload, round=round_info)
         except Exception as exc:  # noqa: BLE001 (신호를 읽은 뒤의 실패는 읽은 신호와 라운드를 못 탄 세계를 싣고 올린다)
-            raise ConsolidationError(f"{type(exc).__name__}: {exc}", signals=signals_out, fresh=fresh_ids) from exc
+            raise ConsolidationError(f"{type(exc).__name__}: {exc}", signals=signals_out, fresh=fresh_ids,
+                                     usage=self._usage_since(marks)) from exc
 
     def _unread_pairs(self, worlds: Sequence[TurnWorld], latest: Optional[str]) -> List[Tuple[TurnWorld, TurnWorld]]:
         """(앞 턴, 다음 턴) 중 앞 턴의 암묵 신호를 아직 읽지 않은 것 — ``latest`` 가 먼저, 그다음 최근 순, 최대 ``signal_pairs``."""
@@ -598,6 +647,11 @@ class Consolidator:
         def run(w: TurnWorld) -> _Trial:
             res = replay_world(w, hdir, self.policy, client_factory=self.client_factory,
                                cancelled=lambda: cancel.is_set() or stop())
+            if res.usage:
+                from xgen_rsi.kernel.ledger import add_usage
+
+                with self._usage_lock:
+                    add_usage(self._replay_usage, res.usage)
             return self._score(w, _Trial(res, "replay"), checks, judged)
 
         if pending:
