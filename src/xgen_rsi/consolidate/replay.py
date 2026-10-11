@@ -238,6 +238,9 @@ class ReplayResult:
     transcript: List[Dict[str, Any]] = field(default_factory=list)
     error: str = ""
     seconds: float = 0.0
+    #: 이 재생이 실제로 부른 모델 호출의 합(purpose 무관, ``ledger.usage_totals`` 모양). 저장(to_json)하지 않는다:
+    #: 정리 한 번의 비용을 호스트에 알릴 때만 쓴다(캐시에서 다시 읽은 시행은 이번에 부른 것이 아니다).
+    usage: Dict[str, int] = field(default_factory=dict)
 
     @property
     def missing(self) -> bool:
@@ -283,6 +286,7 @@ def replay_world(world: TurnWorld, harness_dir: str | Path, policy: Any, *,
     memory_provider = ReplayMemoryProvider(mem.get("chunks")) if mem.get("present") else None
     with tempfile.TemporaryDirectory(prefix="rsi-replay-") as workdir:
         host = _ReplayHost(harness_dir=str(harness_dir), policy=policy, client_factory=client_factory, workdir=workdir)
+        prepared: Any = None
         try:
             registry = build_registry(world, book)
             plan = build_plan(world, provider=policy.provider, model=policy.model, api_key=policy.api_key or "",
@@ -307,6 +311,12 @@ def replay_world(world: TurnWorld, harness_dir: str | Path, policy: Any, *,
                 out.error = out.answer[:500]
         except Exception as exc:  # noqa: BLE001 — 재생 실패는 결과로(누락 시행)
             out.error = f"{type(exc).__name__}: {exc}"[:500]
+        # 실패한 재생도 그때까지 부른 호출은 비용이다.
+        ledger = getattr(prepared, "ledger", None)
+        if ledger is not None:
+            from xgen_rsi.kernel.ledger import usage_totals
+
+            out.usage = usage_totals(getattr(ledger, "records", None) or ())
     out.off_support = len(book.off_support)
     out.answered = book.answered
     out.seconds = round(time.monotonic() - started, 3)

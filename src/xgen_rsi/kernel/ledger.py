@@ -142,6 +142,10 @@ class UsageLedger:
         """c(τ) = 이 턴의 모든 정책 호출의 (input + output) 합 — purpose 무관(설계 05 §2.2)."""
         return sum(r.policy_tokens for r in self.records)
 
+    def auxiliary_records(self) -> List[CallRecord]:
+        """외부 usage 에 합산하지 않는 호출(압축·증류·검증 등 보조 호출) 중 실제로 응답을 받은 것."""
+        return [r for r in self.records if r.purpose not in EXTERNAL_PURPOSES and not r.error]
+
     def by_purpose(self) -> Dict[str, Dict[str, int]]:
         out: Dict[str, Dict[str, int]] = {}
         for r in self.records:
@@ -169,7 +173,8 @@ class UsageLedger:
         from xgen_rsi.base.core.state import TokenUsage
 
         calls = [u for u in self.external_usages if isinstance(u, TokenUsage)]
-        if not calls:
+        auxiliary = auxiliary_payload(self.auxiliary_records())
+        if not calls and auxiliary is None:
             return None
         total = TokenUsage()
         for u in calls:
@@ -201,6 +206,9 @@ class UsageLedger:
         }
         if harness:
             usage["harness"] = harness
+        if auxiliary is not None:
+            # 기존 runtime ``turn_usage`` 의 ``auxiliary`` 와 같은 모양(4.87.0). 최상위 값은 그대로 메인 루프만이다.
+            usage["auxiliary"] = auxiliary
         return usage
 
 
@@ -330,3 +338,41 @@ def _get(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
+
+
+_USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
+
+
+def usage_totals(records: Any) -> Dict[str, int]:
+    """호출 기록들의 합 ``{input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, calls}``.
+
+    값은 공급자 usage 의 정의 그대로다(Anthropic 계열은 캐시분이 input 밖에 따로 있다). 실패한 호출은 0 이라 그대로 더해도 된다.
+    """
+    out = {k: 0 for k in _USAGE_KEYS}
+    out["calls"] = 0
+    for r in records or ():
+        out["input_tokens"] += int(getattr(r, "input_tokens", 0) or 0)
+        out["output_tokens"] += int(getattr(r, "output_tokens", 0) or 0)
+        out["cache_read_tokens"] += int(getattr(r, "cache_read", 0) or 0)
+        out["cache_creation_tokens"] += int(getattr(r, "cache_write", 0) or 0)
+        if not getattr(r, "error", None):
+            out["calls"] += 1
+    return out
+
+
+def add_usage(into: Dict[str, int], more: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    """``usage_totals`` 모양끼리 더한다(into 를 고쳐 돌려준다)."""
+    for k in (*_USAGE_KEYS, "calls"):
+        into[k] = int(into.get(k, 0) or 0) + int((more or {}).get(k, 0) or 0)
+    return into
+
+
+def auxiliary_payload(records: Any) -> Optional[Dict[str, Any]]:
+    """보조 호출 기록 → ``auxiliary`` 페이로드(purpose 별 합 포함). 없으면 None."""
+    records = list(records or ())
+    if not records:
+        return None
+    grouped: Dict[str, List[Any]] = {}
+    for r in records:
+        grouped.setdefault(str(r.purpose or "auxiliary"), []).append(r)
+    return {**usage_totals(records), "by_purpose": {p: usage_totals(rs) for p, rs in grouped.items()}}

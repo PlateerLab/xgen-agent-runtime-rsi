@@ -87,6 +87,11 @@ def test_correction_in_the_next_message_leads_to_an_adopted_harness(monkeypatch)
     assert any(r.get("outcome") == "ACCEPTED" and r.get("component") == "prompt" for r in st.records)
     assert res.version in st.cache and "io-1" in st.cache[res.version], "the adopted harness's replays seed the next consolidation"
     json.dumps(st.to_json())  # 호스트가 그대로 저장한다
+    # 정리 비용: 이번에 돌린 재생의 모델 호출 합이 결과에 실린다(호스트가 토큰 사용량에 더한다)
+    replay = res.usage["by_part"]["replay"]
+    assert replay["calls"] > 0 and replay["input_tokens"] == 10 * replay["calls"]
+    assert res.usage["input_tokens"] == replay["input_tokens"] and res.usage["model"] == POLICY.model
+    assert res.summary()["usage"] == res.usage
 
 
 def test_next_consolidation_continues_the_agents_history(monkeypatch):
