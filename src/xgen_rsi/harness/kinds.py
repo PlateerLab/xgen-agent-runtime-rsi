@@ -99,6 +99,17 @@ class ContextComponent(Protocol):
 
 
 @runtime_checkable
+class OverflowRecovery(Protocol):
+    """context_mgmt 구성요소가 더 갖출 수 있는 선택 프로토콜: 공급자의 창 넘침 거절 뒤 이력을 줄인다.
+
+    커널은 이 메서드가 있을 때만 부르고(``PROTOCOLS`` 에는 없다, 없어도 하네스는 로드된다), True 면 요청을 턴
+    기록에서 다시 지어 한 번만 다시 보낸다. ``error`` 는 공급자의 :class:`~xgen_rsi.base.core.errors.APIError`.
+    """
+
+    async def recover_overflow(self, rt: "TurnRuntime", error: Any) -> bool: ...
+
+
+@runtime_checkable
 class ControlComponent(Protocol):
     kind: str
 

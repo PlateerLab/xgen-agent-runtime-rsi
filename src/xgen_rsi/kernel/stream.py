@@ -58,7 +58,19 @@ def _attach_tool_use_id(event: Dict[str, Any], tool_use_id: Any) -> None:
     event["run_id"] = value
 
 
-def tool_call_event(name: str, tool_input: Any, *, tool_use_id: Any = None) -> Dict[str, Any]:
+def _attach_tool_facts(event: Dict[str, Any], data: Any) -> None:
+    """도구 사건의 능력·출처를 호스트 사건에 싣는다(런타임 4.88 과 같은 규칙)."""
+    if not isinstance(data, dict):
+        return
+    caps = data.get("capabilities")
+    if isinstance(caps, dict):
+        event["capabilities"] = dict(caps)
+    origin = data.get("origin")
+    if isinstance(origin, str) and origin:
+        event["origin"] = origin
+
+
+def tool_call_event(name: str, tool_input: Any, *, tool_use_id: Any = None, facts: Any = None) -> Dict[str, Any]:
     event: Dict[str, Any] = {
         "type": "tool_call",
         "tool_name": name,
@@ -66,6 +78,7 @@ def tool_call_event(name: str, tool_input: Any, *, tool_use_id: Any = None) -> D
         "timestamp": datetime.now().isoformat(),
     }
     _attach_tool_use_id(event, tool_use_id)
+    _attach_tool_facts(event, facts)
     indicator = _indicator(name)
     if indicator:
         event["indicator"] = indicator
@@ -325,7 +338,9 @@ class TurnDriver:
                     elif tool_events and etype == "tool.call_start":
                         yield {
                             "type": "agent_event",
-                            "data": tool_call_event(data.get("name", ""), data.get("input"), tool_use_id=data.get("tool_use_id")),
+                            "data": tool_call_event(
+                                data.get("name", ""), data.get("input"), tool_use_id=data.get("tool_use_id"), facts=data
+                            ),
                         }
                     elif tool_events and etype == "tool.call_complete":
                         name = data.get("name", "")

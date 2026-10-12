@@ -547,16 +547,18 @@ def build_pipeline(
     executor 기본값(200k)이 쓰이는데, 작은 윈도우 모델(vLLM 32k 등)에서는
     압축이 트리거되기 전에 provider 400 이 먼저 난다 — 호출자(agent_geny)가
     token_budget 헬퍼로 해석한 실측/카탈로그 값을 반드시 넘겨야 한다.
-    Stage 2(80% proactive)·Stage 4 guard·Stage 16 토큰-비 루프 정지가 전부
-    이 값을 기준으로 동작한다.
+    Stage 2(80% proactive)·Stage 4 guard·Stage 6 넘침 복구·Stage 10 도구 결과
+    상한·내장 메모리 주입 상한이 전부 이 값을 기준으로 동작한다.
 
     ``enable_compaction`` — 노드의 "컨텍스트 자동 압축" 토글.
     True(기본): Stage 2 가 **항상** 등록되고(메모리 유무 무관 — 압축은 메모리
-    기능이 아니다) LLMSummaryCompactor 로 80% 초과 시 같은 모델 요약-압축,
-    Stage 4 에 TokenBudgetGuard 가 등록되어 예산 부족 시 compact→1회 재검사
-    (auto-wire 는 Pipeline._init_state). False: 압축 전면 꺼짐 — Stage 2 는
-    메모리 배선용으로만 등록되고(compaction_enabled=False → 프루닝·요약·
-    guard 회복까지 전부 스킵, executor 3.3.0 계약), guard 미등록.
+    기능이 아니다) 다음 요청 추정이 창의 80% 를 넘으면 LLMSummaryCompactor 가
+    50% 까지 같은 모델로 요약해 체크포인트로 바꾼다(core.compaction). Stage 4
+    TokenBudgetGuard 는 예산 부족 시 강하게 압축(공격적 정리 + 요약, 실패하면
+    결정적 다이제스트)한 뒤 1회 재검사하고, Stage 6 은 provider 의 "prompt too
+    long" 거절에 같은 강한 압축 후 1회 재시도한다. False: 압축 전면 꺼짐.
+    Stage 2 는 메모리 배선용으로만 등록되고(compaction_enabled=False → 프루닝·
+    요약·guard 회복까지 전부 스킵), guard 미등록.
 
     ``prune_over_tokens`` — 결정적 prune 의 **비용 트리거** (4.35.0,
     core/context_prune.py). 예상 프롬프트가 이 토큰 수를 넘으면 매 반복 앞에서
@@ -669,10 +671,10 @@ def build_pipeline(
             TokenBudgetGuard,
         )
 
-        headroom = max(4096, int(max_tokens) + 2048)
-        if context_window_budget and int(context_window_budget) > 0:
-            headroom = min(headroom, max(1024, int(context_window_budget) // 2))
-        builder.with_guard(guards=[TokenBudgetGuard(min_remaining_tokens=headroom)])
+        # The guard's default headroom (0) is the reserve the compaction policy measures its input
+        # budget against (core.compaction.output_reserve), computed from the state at every check:
+        # the 80% trigger always comes before the guard, also after an overflow lowered the window.
+        builder.with_guard(guards=[TokenBudgetGuard()])
 
     if memory_provider is not None:
         # ⚠ 스테이지 등록이 선행 조건 — attach_runtime 의 슬롯 배선은 스테이지가
@@ -764,6 +766,7 @@ def build_pipeline(
         #         (Geny 의 MemoryContextBlock 경로와 동일 — 2.50 분리형 블록 사용)
         try:
             from xgen_rsi.base.memory.retriever import MemoryAwareRetriever
+            from xgen_rsi.base.memory.provider import provider_hooks
 
             from xgen_rsi.base.host.conversation_archive import ConversationArchivingStrategy
             from xgen_rsi.base.stages.s03_system.artifact.default.builders import (
@@ -776,8 +779,23 @@ def build_pipeline(
             )
 
             pipeline._memory_provider = memory_provider
+            retrieval_hooks = provider_hooks(memory_provider)
+            if context_window_budget and int(context_window_budget) > 0:
+                # 주입 상한(글자)을 창에 맞춘다. 기본 10,000자는 8k~32k 창에서 그것만으로 3분의 1을
+                # 넘는다. provider 의 hooks 는 그대로 두고 이 턴의 검색기만 줄인 판을 받는다.
+                import dataclasses
+
+                from xgen_rsi.base.host.context_budget import memory_inject_cap_chars
+                from xgen_rsi.base.memory.provider import MemoryHooks
+
+                base_hooks = retrieval_hooks or MemoryHooks()
+                cap = memory_inject_cap_chars(
+                    int(context_window_budget), base_hooks.max_inject_chars
+                )
+                if cap < base_hooks.max_inject_chars:
+                    retrieval_hooks = dataclasses.replace(base_hooks, max_inject_chars=cap)
             pipeline.attach_runtime(
-                memory_retriever=MemoryAwareRetriever(memory_provider),
+                memory_retriever=MemoryAwareRetriever(memory_provider, hooks=retrieval_hooks),
                 memory_strategy=ConversationArchivingStrategy(memory_provider),
                 system_builder=ComposablePromptBuilder(
                     blocks=[
@@ -916,11 +934,24 @@ def _attach_tool_use_id(event: Dict[str, Any], tool_use_id: Any) -> None:
     event["run_id"] = value
 
 
+def _attach_tool_facts(event: Dict[str, Any], data: Any) -> None:
+    """파이프라인 사건의 능력 · 출처를 호스트 사건에 싣는다."""
+    if not isinstance(data, dict):
+        return
+    caps = data.get("capabilities")
+    if isinstance(caps, dict):
+        event["capabilities"] = dict(caps)
+    origin = data.get("origin")
+    if isinstance(origin, str) and origin:
+        event["origin"] = origin
+
+
 def _tool_call_event(
     name: str,
     tool_input: Any,
     *,
     tool_use_id: Any = None,
+    facts: Any = None,
 ) -> Dict[str, Any]:
     event: Dict[str, Any] = {
         "type": "tool_call",
@@ -931,6 +962,7 @@ def _tool_call_event(
         "timestamp": datetime.now().isoformat(),
     }
     _attach_tool_use_id(event, tool_use_id)
+    _attach_tool_facts(event, facts)
     indicator = _indicator(name)
     if indicator:
         event["indicator"] = indicator
@@ -1053,16 +1085,25 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
          "cache_read_tokens": int|None, "cache_creation_tokens": int|None,
          "total_cost_usd": float|None, "model": str|None, "provider": str|None,
          "calls": int, "first_call_prompt_tokens": int, "max_call_prompt_tokens": int,
-         "harness": {"components": {name: int}, "fast_path": {...}}  # 있을 때만
+         "harness": {"components": {name: int}, "fast_path": {...}},  # 있을 때만
+         "auxiliary": {"input_tokens": int, "output_tokens": int,      # 있을 때만
+                       "cache_read_tokens": int, "cache_creation_tokens": int,
+                       "calls": int, "by_purpose": {purpose: {...같은 네 값과 calls}}}
         }
 
+    위 최상위 토큰 값은 메인 루프 호출만이다(예전과 같다). ``auxiliary`` 는 메인 루프 밖에서 모델을 부른
+    보조 호출(대화 압축 등, ``state.aux_usage_entries()``)의 합이다. 같은 클라이언트라 provider 의 캐시 규칙도 같다.
+    호스트가 과금·한도에 더할지 정한다.
+
     사용량이 전혀 기록되지 않은 턴(API 호출 0회 — 가드 거절·즉시 오류)은
-    ``None`` — 호출자는 이때 usage 청크를 내지 않는다.
+    ``None`` 이고, 호출자는 이때 usage 청크를 내지 않는다. 보조 호출만 있었던 턴은 메인 값이 0 인 페이로드다.
     """
     from xgen_rsi.base.core.state import TokenUsage
 
     calls = list(getattr(state, "turn_token_usage", None) or [])
-    if not calls:
+    entries = state.aux_usage_entries() if hasattr(state, "aux_usage_entries") else []
+    auxiliary = aux_usage_summary(entries)
+    if not calls and auxiliary is None:
         return None
     total = TokenUsage()
     for u in calls:
@@ -1119,7 +1160,43 @@ def turn_usage(pipeline: Pipeline, state: PipelineState) -> Optional[Dict[str, A
     harness = harness_summary(state)
     if harness:
         usage["harness"] = harness
+    if auxiliary is not None:
+        usage["auxiliary"] = auxiliary
     return usage
+
+
+def aux_usage_summary(entries: Any) -> Optional[Dict[str, Any]]:
+    """보조 호출 ``(purpose, TokenUsage)`` 목록 → ``auxiliary`` 페이로드. 없으면 None."""
+    from xgen_rsi.base.core.state import TokenUsage
+
+    keys = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
+    total = {k: 0 for k in keys}
+    total["calls"] = 0
+    by_purpose: Dict[str, Dict[str, int]] = {}
+    for entry in entries or ():
+        try:
+            purpose, u = entry
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(u, TokenUsage):
+            continue
+        vals = (
+            int(u.input_tokens or 0),
+            int(u.output_tokens or 0),
+            int(u.cache_read_input_tokens or 0),
+            int(u.cache_creation_input_tokens or 0),
+        )
+        bucket = by_purpose.setdefault(
+            str(purpose or "auxiliary"), {**{k: 0 for k in keys}, "calls": 0}
+        )
+        for k, v in zip(keys, vals):
+            total[k] += v
+            bucket[k] += v
+        total["calls"] += 1
+        bucket["calls"] += 1
+    if not total["calls"]:
+        return None
+    return {**total, "by_purpose": by_purpose}
 
 
 def _should_record_execution(host: Any, *, produced_output: bool, failed: bool) -> bool:
@@ -1253,14 +1330,22 @@ def _record_unfinished_turn(
                 and not _is_tool_result_only(msg.get("content"))
             )
 
+        from xgen_rsi.base.core.compaction import (
+            RECORDER_STM,
+            peek_pending_records,
+            take_pending_records,
+        )
+
         messages = list(state.messages)
         start = _recorded_upto(state)
-        pending = [m for m in messages[start:] if isinstance(m, dict)]
+        # Messages a mid-turn compaction summarized away (the user's question among them) first.
+        compacted = peek_pending_records(state, RECORDER_STM)
+        pending = compacted + [m for m in messages[start:] if isinstance(m, dict)]
         try:
             window_len = int(state.metadata.get(WINDOW_LEN_KEY, 0) or 0)
         except (TypeError, ValueError):
             window_len = 0
-        if not any(_asks(m) for m in messages[window_len:]):
+        if not any(_asks(m) for m in compacted + messages[window_len:]):
             question = TurnInput.from_raw(input_text).text.strip()
             if question:
                 pending.insert(0, {"role": "user", "content": question})
@@ -1276,6 +1361,7 @@ def _record_unfinished_turn(
         loop.run_until_complete(asyncio.wait_for(_write(), timeout=10.0))
         state.metadata[_STATE_LAST_RECORDED] = len(messages)
         state.metadata[_STRATEGY_RECORDED] = len(messages)
+        take_pending_records(state, RECORDER_STM)
         logger.info(
             "geny_bridge: unfinished turn kept in short-term memory (%s, %d messages)",
             reason,
@@ -1555,6 +1641,7 @@ def stream_turn(
                             event.data.get("name", ""),
                             event.data.get("input"),
                             tool_use_id=event.data.get("tool_use_id"),
+                            facts=event.data,
                         ),
                     }
                 elif tool_events and event.type == "tool.call_complete":

@@ -50,7 +50,7 @@
 | 런타임 · 패키지 | geny · xgen-agent-runtime | geny-rsi · xgen-agent-runtime-rsi. **서로 import·의존하지 않는다** |
 | 진입점 | `AgentTurnExecutor().run(host, **kwargs)` | `GenyRSITurnExecutor().run(host, **kwargs)` — 같은 계약 |
 | 포트·세부 설정·자격증명·모델 | 같다 | 같다 |
-| 기억·작업·도구·앱·스토리지·진화 이력 | runtime 의 요소 계층 | **같은 코드** — runtime 4.81.0 을 `xgen_rsi.base` 로 복사(파일 해시를 `COPY.json` 에 기록, 테스트로 검사) |
+| 기억·작업·도구·앱·스토리지·진화 이력 | runtime 의 요소 계층 | **같은 코드**: runtime 4.89.0 을 `xgen_rsi.base` 로 복사(파일 해시를 `COPY.json` 에 기록, 테스트로 검사) |
 | **harness pipeline** | 21-stage 엔진. 사람이 측정하고 릴리스로 고친다 | 고정 커널 K₀ + 하네스 H. **H0 에서 시작해 그 에이전트의 사용으로 RRSI 가 진화시킨다**(에이전트마다 자기 하네스) |
 | 탐색 정책 | 없다 | π_E. **Dream-RSI** 가 진화시킨다(검증기가 있는 탐색에서 쓴다) |
 
@@ -293,7 +293,7 @@ XGEN 은 채택할 때 에이전트 workspace 의 `.rsi/harness/sha256-<hex>.xgr
 
 ### 1. Geny 기본 — 요소는 그대로
 
-geny-rsi 는 runtime 4.81.0 을 `xgen_rsi.base` 로 복사했다. 519개 파일 중 517개가 바이트 동일하고, 나머지 2개(버전 표기·docstring 경로)는
+geny-rsi 는 runtime 4.89.0 을 `xgen_rsi.base` 로 복사했다. 522개 파일 중 520개가 바이트 동일하고, 나머지 2개(버전 표기·docstring 경로)는
 이유와 함께 `tools/sync_base.py` 에 적혀 있다. 공급자 계층(15종: anthropic·openai·google·vllm·bedrock·vertex·azure·ollama·claude_code_cli·codex_cli …),
 도구·기억·작업·앱·스토리지·자기 진화·호스트 계약, 그리고 비교 기준인 21-stage 엔진까지 전부 이 사본에서 온다. 턴 조립(호스트 계약 26단계)도
 runtime 과 같은 동작의 사본(`xgen_rsi.assembly`)이다. runtime 이 바뀌면 사본을 따로 갱신한다(`tools/sync_base.py`).
@@ -451,7 +451,7 @@ rsi dream cycle runs/cycle1 --worlds worlds.json --incumbent builtin:parallel_re
 
 ```
 호스트 ──GenyRSITurnExecutor().run(host, **kwargs)──► xgen_rsi.assembly(턴 조립 — runtime 과 같은 동작의 사본) ──► 커널
-        (Agent Geny 는 AgentTurnExecutor — 같은 계약)       공급자·도구·기억·작업·앱·스토리지는 사본 xgen_rsi.base(4.81.0)     │
+        (Agent Geny 는 AgentTurnExecutor, 같은 계약)       공급자·도구·기억·작업·앱·스토리지는 사본 xgen_rsi.base(4.89.0)     │
  ┌──────────────────────── K₀ 커널 (고정) ─────────────────────────────────────────────────────────────────────────▼──┐
  │ engine    context → prompt → client_tool → guard → config → call → parse → tools → control (결정 한 자리)           │
  │ model_call 요청 조립·스트림·재시도(base 공급자 계층) · ledger 모든 정책 호출과 c(τ) · tools 권한·거부·반복 차단         │
@@ -508,7 +508,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest -q        # 테스트(실제 모델 호출 없음)
 .venv/bin/python -m mypy             # rsi_math strict
 .venv/bin/ruff check src tests tools experiments
-.venv/bin/python tools/sync_base.py --check   # xgen_rsi.base 가 runtime 4.81.0 사본 그대로인지
+.venv/bin/python tools/sync_base.py --check   # xgen_rsi.base 가 runtime 4.89.0 사본 그대로인지
 ```
 
 ## 문서
@@ -546,7 +546,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 }
 ```
 
-- PlateerLab, *xgen-agent-runtime* — geny(21-stage 하네스), 다중 공급자 계층, 호스트 계약. 4.81.0 을 `xgen_rsi.base` 로 복사해 쓴다(Apache-2.0)
+- PlateerLab, *xgen-agent-runtime*: geny(21-stage 하네스), 다중 공급자 계층, 호스트 계약. 4.89.0 을 `xgen_rsi.base` 로 복사해 쓴다(Apache-2.0)
 
 ## 라이선스
 

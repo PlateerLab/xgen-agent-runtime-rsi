@@ -1,7 +1,7 @@
 {
   "schema": "xgen-rsi-harness/1",
   "name": "h0",
-  "description": "Starting harness H0: the production behaviour of runtime 4.75 expressed as K-typed components. RRSI starts here and measures everything against H0.",
+  "description": "Starting harness H0: the production behaviour of runtime 4.89 expressed as K-typed components. RRSI starts here and measures everything against H0.",
   "enabled_kinds": [
     "prompt",
     "control_flow",
@@ -39,15 +39,12 @@
       "id": "context.standard",
       "kind": "context_mgmt",
       "impl": "xgen_rsi.components.context:StandardContextComponent",
-      "description": "First-iteration memory injection, cost-triggered pruning (estimated prompt > prune_over_tokens), capacity-triggered summary compaction (> window x proactive_ratio -> window x target_ratio), budget guard.",
+      "description": "Runtime 4.89 compaction policy: first-iteration memory injection, cost-triggered pruning (estimated prompt > prune_over_tokens), capacity-triggered relief when the prompt passes proactive_ratio of the compressible input budget, down to target_ratio (prune first, then a model summary). The budget guard and the provider-overflow recovery are fixed.",
       "params": {
         "prune_over_tokens": 30000,
         "proactive_ratio": 0.8,
-        "target_ratio": 0.7,
-        "retrieval_timeout_s": 10.0,
-        "guard": true,
-        "guard_min_headroom": 4096,
-        "guard_extra": 2048
+        "target_ratio": 0.5,
+        "retrieval_timeout_s": 10.0
       }
     },
     {

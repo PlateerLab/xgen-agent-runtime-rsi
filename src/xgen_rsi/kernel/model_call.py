@@ -8,20 +8,27 @@
 * 모든 호출이 :class:`~xgen_rsi.kernel.ledger.LedgerClient` 를 지나 원장에 남는다(purpose 포함).
 * 모델 라우팅·페일오버를 하지 않는다 — RRSI 는 정책 π 를 고정한다(설계 31 §3.2 평가 모드 불변식).
 * 루프 결정이 없다. 호출은 응답만 돌려주고, 계속할지는 control_flow 구성요소가 정한다.
+
+넘침 복구(런타임 4.89.0 의 Stage 6 와 같다): 턴 기록으로 지은 요청을 공급자가 창을 넘었다고(``TOKEN_LIMIT``) 거절하면
+엔진이 넘겨 준 ``recover`` 훅(context 구성요소의 ``recover_overflow``)을 부르고, 그것이 True 면 요청을 턴 기록에서 다시
+지어 한 번만 다시 보낸다. 성공한 호출마다 압축 정책의 호출 계수를 올리고(``note_api_call``), 턴 기록 그대로의 요청이면
+공급자가 센 입력 토큰을 추정의 기준점으로 남긴다(``record_prompt_usage``).
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 
+from xgen_rsi.base.core.compaction import note_api_call
 from xgen_rsi.base.core.errors import APIError, ErrorCategory, ExecutorErrorCode
 from xgen_rsi.base.core.message_repair import (
     normalize_messages_for_request,
     retire_tool_calls_by_name,
 )
 from xgen_rsi.base.core.shared_keys import SharedKeys
+from xgen_rsi.base.core.token_estimate import record_prompt_usage
 from xgen_rsi.base.llm_client import timeouts as _timeouts
 from xgen_rsi.base.stages.s06_api.artifact.default.retry import ExponentialBackoffRetry
 
@@ -115,14 +122,27 @@ class ModelCaller:
         tools: Optional[List[Dict[str, Any]]] = None,
         stream: Optional[bool] = None,
         emit_text: bool = True,
+        recover: Optional[Callable[[APIError], Awaitable[bool]]] = None,
     ) -> Any:
         """요청을 보내고 :class:`APIResponse` 를 돌려준다. 실패는 :class:`APIError`.
 
         ``messages``·``system``·``tools`` 를 주지 않으면 턴 기록(state)의 것을 쓴다 — 메인 루프 호출.
         탐색 시도·서브콜처럼 다른 재료로 부르는 호출은 명시해서 넘긴다.
+
+        ``recover``: 턴 기록으로 지은 요청(``messages``·``extra_messages`` 없음)이 ``TOKEN_LIMIT`` 로 거절됐을 때
+        부르는 훅. True 를 돌려주면(이력을 줄였다) 요청을 턴 기록에서 다시 지어 한 번만 다시 보낸다. 두 번째
+        거절은 그대로 올라간다(``api.error`` 는 한 번).
         """
         use_stream = self.stream if stream is None else bool(stream)
-        kwargs = self._kwargs(state, model_config, purpose, extra_messages, messages, system, tools)
+        #: 턴 기록 위의 요청인가(명시한 재료가 아니다). 압축 정책의 호출 계수가 이 요청들을 센다.
+        on_record = messages is None
+        #: 턴 기록 그대로의 요청인가. 공급자가 센 입력 토큰이 곧 다음 추정의 기준점이 된다.
+        from_record = on_record and not extra_messages
+
+        def _build() -> Dict[str, Any]:
+            return self._kwargs(state, model_config, purpose, extra_messages, messages, system, tools)
+
+        kwargs = _build()
         state.add_event(
             "api.request",
             {
@@ -139,22 +159,39 @@ class ModelCaller:
         t_request = time.monotonic()
         state.shared["_api_call_t0"] = t_request
         state.shared.pop("_api_ttft_emitted", None)
-        try:
+
+        async def _invoke(request: Dict[str, Any]) -> Any:
             if use_stream:
-                response = await self._streaming_with_retry(state, model_config, kwargs, emit_text)
-            else:
-                response = await self._plain_with_retry(state, kwargs)
-                state.add_event(
-                    "api.ttft",
-                    {
-                        "ttft_ms": round((time.monotonic() - t_request) * 1000.0, 1),
-                        "provider": self.provider,
-                        "model": getattr(model_config, "model", ""),
-                        "stream": False,
-                        "iteration": getattr(state, "iteration", 0),
-                        "first_visible": "complete",
-                    },
-                )
+                return await self._streaming_with_retry(state, model_config, request, emit_text)
+            result = await self._plain_with_retry(state, request)
+            state.add_event(
+                "api.ttft",
+                {
+                    "ttft_ms": round((time.monotonic() - t_request) * 1000.0, 1),
+                    "provider": self.provider,
+                    "model": getattr(model_config, "model", ""),
+                    "stream": False,
+                    "iteration": getattr(state, "iteration", 0),
+                    "first_visible": "complete",
+                },
+            )
+            return result
+
+        try:
+            try:
+                response = await _invoke(kwargs)
+            except APIError as e:
+                # 공급자가 요청이 창에 들지 않는다고 했다(런타임 4.89.0): 이력을 강하게 줄이고 한 번만 다시 보낸다.
+                if not (
+                    recover is not None
+                    and e.category == ErrorCategory.TOKEN_LIMIT
+                    and from_record
+                    and await recover(e)
+                ):
+                    raise
+                # 거절된 시도에서 흘린 글은 다시 보내기 전에 버린다.
+                self._signal_stream_restart(state)
+                response = await _invoke(_build())
         except APIError as e:
             payload: Dict[str, Any] = {
                 "code": e.code.value if e.code is not None else "exec.unknown",
@@ -167,6 +204,15 @@ class ModelCaller:
                 payload["cli_version"] = str(cli_version)
             state.add_event("api.error", payload)
             raise
+        # 공급자가 센 이 요청의 크기가 이 턴의 다음 크기 판단의 기준점이다(core.token_estimate). 명시한 재료로
+        # 부른 호출은 턴 기록의 요청이 아니므로 세지도, 기준점으로 삼지도 않는다.
+        if on_record:
+            note_api_call(state)
+        if from_record:
+            try:
+                record_prompt_usage(state, self.client.prompt_tokens_from_usage(response.usage))
+            except Exception:  # noqa: BLE001 (an estimate anchor must never fail a call)
+                pass
         state.add_event(
             "api.response",
             {
