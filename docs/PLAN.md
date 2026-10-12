@@ -194,7 +194,7 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 | ID | 결과 |
 |---|---|
 | D-1 | (a) 채택 — 새 저장소 `xgen-agent-runtime-rsi`, import `xgen_rsi`. 원격 공개는 별도 결정 |
-| D-2 | A, **두 패키지 완전 독립** — geny-rsi 는 자체 진입점 `GenyRSITurnExecutor().run(host, **kwargs)`(같은 계약)와 턴 조립(`xgen_rsi.assembly`)을 갖고, 호스트가 진입점을 고른다. 0.3.0 부터 xgen-agent-runtime 을 import·의존하지 않고 사본 `xgen_rsi.base`(0.6.0 기준 4.81.0)를 쓴다. 한때 런타임에 넣었던 엔진 선택점(4.76.0·4.79.0)은 4.80.0 에서 걷어 냈다 — RSI 코드는 이 저장소에만 둔다 |
+| D-2 | A, **두 패키지 완전 독립**: geny-rsi 는 자체 진입점 `GenyRSITurnExecutor().run(host, **kwargs)`(같은 계약)와 턴 조립(`xgen_rsi.assembly`)을 갖고, 호스트가 진입점을 고른다. 0.3.0 부터 xgen-agent-runtime 을 import·의존하지 않고 사본 `xgen_rsi.base`(0.11.0 기준 4.89.0)를 쓴다. 한때 런타임에 넣었던 엔진 선택점(4.76.0·4.79.0)은 4.80.0 에서 걷어 냈다. RSI 코드는 이 저장소에만 둔다 |
 | D-3 | (a) — subagent 비활성(𝒦_enabled 8종), 수식은 9종 유지 |
 | D-6 | 재현 — `"\n[ERROR] "` 청크를 기존과 같게 |
 | D-7 | 기존 유지 — 외부 usage = main + explore_attempt, 정확한 c(τ) 는 원장·기록에만 |
@@ -210,7 +210,7 @@ Phase 9  (실험) L1 제어기 Dream 화, 인스턴스·lineage 확장       ☐
 
 검증한 것(xgen-agent-runtime 이 설치되지 않은 환경의 테스트):
 
-- 독립 패키지: 바탕 런타임은 xgen-agent-runtime 4.81.0 사본 `xgen_rsi.base`(519 파일 중 517 바이트 동일, `COPY.json`·`tools/sync_base.py`·테스트로 검사).
+- 독립 패키지: 바탕 런타임은 xgen-agent-runtime 4.89.0 사본 `xgen_rsi.base`(522 파일 중 520 바이트 동일, `COPY.json`·`tools/sync_base.py`·테스트로 검사).
 - `rsi_math`: 두 논문 수식 전부 + 정확 경계 조기 종료. 공식 RRSI 구현과의 차분 테스트, mypy strict.
 - 커널·H0: 기존 엔진과 동등성 시나리오 + 실제 응답 재생에서 요청 바이트 동일. 두 턴 경로 대조 검토(Geny 요소 누락 없음, H0 에서도 다른 5곳은 보고서 §1.2).
 - 스위트: `xgen-core`·`xgen-hard`·`xgen-pro`.

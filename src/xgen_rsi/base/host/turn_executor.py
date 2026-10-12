@@ -10,6 +10,7 @@ xgen_rsi.base.host.* 로 repoint 하면 같은 본체가 로컬에서 돈다(무
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 from dataclasses import replace
@@ -25,8 +26,10 @@ from xgen_rsi.base.host._constants import (  # noqa: E402
     SELF_EVOLUTION_PROMPT_BLOCK,
 )
 from xgen_rsi.base.host import local_folders as _local_folders
+from xgen_rsi.base.host import user_pc as _user_pc
 from xgen_rsi.base.host.tool_exposure import registers_core, sends_every_schema
 from xgen_rsi.base.host.turn_input import TurnInput
+from xgen_rsi.base.tools.built_in.read_tool import MODEL_VISION_KEY
 
 
 #: 턴 안에서 MCP 도구 목록을 다시 읽지 않는 CLI 백엔드 — 계층 노출(문 뒤에 숨긴 도구)을 쓸 수 없다.
@@ -138,6 +141,23 @@ def _folder_device_info(host: Any) -> Dict[str, Any]:
     return dict(info) if isinstance(info, dict) else {}
 
 
+def _user_pc_connection(host: Any) -> Optional[Any]:
+    """이번 턴의 사용자 기기 접속 — 호스트가 주면(OPTIONAL 훅 ``user_pc_connection``).
+
+    None 이면 예전 기기 도구 규칙(host.local_folders)으로 돈다. 접속 객체를 주면 폴더가 없어도
+    새 규칙이다: 기기의 폴더 도구는 보이지 않고, 연결 폴더가 있으면 UserPc 가 붙는다.
+    """
+    probe = getattr(host, "user_pc_connection", None)
+    if not callable(probe):
+        return None
+    try:
+        conn = probe()
+    except Exception:  # noqa: BLE001 — 접속을 못 만들면 예전 규칙으로(턴은 깨지 않는다)
+        logger.warning("agents/geny: 사용자 기기 접속을 만들지 못함 (예전 규칙으로)", exc_info=True)
+        return None
+    return conn if isinstance(conn, _user_pc.UserPcConnection) else None
+
+
 def _local_device_platform(host: Any) -> Optional[str]:
     """이번 턴 기기의 OS — 호스트가 알면(OPTIONAL 훅). 모르면 None(안내는 "device")."""
     probe = getattr(host, "local_device_platform", None)
@@ -166,6 +186,45 @@ def _tool_result_filter(host: Any) -> Optional[Any]:
     return result_filter if callable(result_filter) else None
 
 
+def _model_vision(provider: str, model: str, override: Any = None) -> bool:
+    """이 턴의 모델이 그림을 보는가. 해석이 실패하면 못 본다(그림을 안 보내는 쪽이 턴을 안 깬다)."""
+    try:
+        from xgen_rsi.base.host.token_budget import resolve_supports_vision
+
+        return resolve_supports_vision(provider, model, override)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "agents/geny: 이미지 입력 해석 실패(%s/%s) — 못 보는 모델로 둔다",
+            provider,
+            model,
+            exc_info=True,
+        )
+        return False
+
+
+def _host_turn_notes(host: Any) -> List[str]:
+    """호스트의 이번 턴 안내(OPTIONAL 동기 훅 ``turn_notes``). 없거나 실패하면 빈 목록."""
+    probe = getattr(host, "turn_notes", None)
+    if not callable(probe):
+        return []
+    try:
+        notes = probe()
+    except Exception:  # noqa: BLE001 - 안내 때문에 턴을 깨지 않는다
+        logger.warning("agents/geny: 호스트 턴 안내 실패 (무시)", exc_info=True)
+        return []
+    if inspect.iscoroutine(notes):
+        notes.close()  # 기다리지 않은 코루틴 경고를 막는다
+        logger.warning(
+            "agents/geny: 호스트 턴 안내 훅이 비동기라 무시합니다 (동기 함수여야 합니다)"
+        )
+        return []
+    if isinstance(notes, str):
+        notes = [notes]
+    if not isinstance(notes, (list, tuple)):
+        return []
+    return [str(n).strip() for n in notes if str(n or "").strip()]
+
+
 class AgentTurnExecutor:
     """execute() 의 host-무관 판. 서버·커넥터가 같은 run() 을 돈다."""
 
@@ -173,7 +232,7 @@ class AgentTurnExecutor:
         # node_name 은 워크플로 executor 가 kwargs 에 실어 준다(node_info nodeName)
         # = 노드의 self.nodeName. build_pipeline name= 에만 쓰인다.
         node_name = kwargs.get("node_name") or ""
-        from xgen_rsi.base.host.memory import history_messages
+        from xgen_rsi.base.host.memory import history_context, history_messages
         from xgen_rsi.base.host.rag import collect_rag
         from xgen_rsi.base.host.runner import (
             DEFAULT_MAX_CONTINUATION_SLICES,
@@ -300,15 +359,21 @@ class AgentTurnExecutor:
             # host.local_folders 한 곳이다. 옛 앱·웹(None)은 예전 규칙 그대로다.
             _folders = _local_folders.parse_local_folders(kwargs.get("local_folders"))
             _device_tool_names: List[str] = []
+            # 사용자 기기 접속(host.user_pc) — 호스트가 주면 연결 폴더는 UserPc 하나로 닿고, 기기의
+            # 폴더 도구(파일·셸·복사…)는 모델에게 보이지 않는다. 주지 않으면 예전 규칙 그대로다.
+            _pc = _user_pc_connection(host)
             try:
                 # client_surface 게이트(host 내부): 대화 출처가 앱일 때만 기기 도구를
                 # 준다 (web 대화엔 앱이 연결돼 있어도 no-op).
                 connector_tools = host.build_connector_mcp_tools(
                     kwargs.get("user_id"), kwargs.get("client_surface")
                 )
-                connector_tools = _local_folders.filter_device_tools(
-                    connector_tools or [], _folders
-                )
+                if _pc is not None:
+                    connector_tools = _user_pc.without_folder_tools(connector_tools or [])
+                else:
+                    connector_tools = _local_folders.filter_device_tools(
+                        connector_tools or [], _folders
+                    )
                 _device_tool_names = [getattr(t, "name", "") or "" for t in connector_tools]
                 if connector_tools:
                     # 기기 도구도 계층을 지킨다 — 브라우저 조작 6종은 BrowserGuide 뒤에
@@ -330,23 +395,45 @@ class AgentTurnExecutor:
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("agents/geny: 기기 도구 주입 실패 (무시): %s", exc)
-            #: 이번 턴에 폴더 도구가 하나도 없는가 — 그러면 기록 속 옛 폴더 도구 호출을
-            #: 요청 사본에서 평문으로 바꾼다(없는 도구를 다시 부르거나 옛 경로를 믿지 않게).
-            _retire_device_calls = not any(
-                _local_folders.is_folder_tool(n) for n in _device_tool_names
-            )
             _turn_notes: List[str] = []
-            _folder_info = _folder_device_info(host) if _folders else {}
-            _folder_platform = _local_device_platform(host) if _folders is not None else None
-            _folder_note = _local_folders.turn_note(
-                _folders,
-                available_tools=_device_tool_names,
-                platform=_folder_platform,
-                device_name=str(_folder_info.get("name") or "") or None,
-                remote=bool(_folder_info.get("remote")),
-            )
-            if _folder_note:
-                _turn_notes.append(_folder_note)
+            if _pc is not None:
+                if _pc.folders:
+                    registry = adapt_tools(
+                        [_user_pc.build_user_pc_tool(_pc)],
+                        result_sink=result_sink,
+                        registry=registry,
+                        core=True,
+                    )
+                    _turn_notes.append(_user_pc.turn_note(_pc.folders))
+                    logger.info(
+                        "agents/geny: UserPc 연결 폴더 %d개 (기기 %d대)",
+                        len(_pc.folders),
+                        len({f.device_id for f in _pc.folders}),
+                    )
+                elif _folders is not None:
+                    # 기기 앱에서 보낸 턴인데 연결 폴더가 없다 — 사실과 연결하는 법만 적는다.
+                    _turn_notes.append(_user_pc.no_folder_note())
+                #: 기기의 폴더 도구는 이 경로에서 한 번도 보이지 않는다 — 기록 속 옛 호출은 늘
+                #: 평문으로 바꾼다. 연결 폴더가 없는 턴이면 지난 UserPc 호출도 같다.
+                _retire_device_calls = True
+            else:
+                #: 이번 턴에 폴더 도구가 하나도 없는가 — 그러면 기록 속 옛 폴더 도구 호출을
+                #: 요청 사본에서 평문으로 바꾼다(없는 도구를 다시 부르거나 옛 경로를 믿지 않게).
+                _retire_device_calls = not any(
+                    _local_folders.is_folder_tool(n) for n in _device_tool_names
+                )
+                _folder_info = _folder_device_info(host) if _folders else {}
+                _folder_platform = _local_device_platform(host) if _folders is not None else None
+                _folder_note = _local_folders.turn_note(
+                    _folders,
+                    available_tools=_device_tool_names,
+                    platform=_folder_platform,
+                    device_name=str(_folder_info.get("name") or "") or None,
+                    remote=bool(_folder_info.get("remote")),
+                )
+                if _folder_note:
+                    _turn_notes.append(_folder_note)
+            _turn_notes.extend(_host_turn_notes(host))
             if registry:
                 logger.info(
                     "agents/geny: %d tool(s) registered (%d deferred) from Tools/Context ports",
@@ -363,15 +450,22 @@ class AgentTurnExecutor:
             if _turn_notes:
                 state.shared[SharedKeys.TURN_NOTES] = _turn_notes
             if _retire_device_calls:
-                state.shared[SharedKeys.RETIRED_TOOL_CALLS] = _local_folders.retired_calls_spec()
-            _folder_facts = _local_folders.shared_folder_facts(
-                _folders,
-                device=(
-                    f'{_local_folders.device_label(_folder_platform)} "{_folder_info.get("name")}"'
-                    if _folder_info.get("name")
-                    else _local_folders.device_label(_folder_platform)
-                ),
-            )
+                state.shared[SharedKeys.RETIRED_TOOL_CALLS] = (
+                    _user_pc.retired_calls_spec(has_folders=bool(_pc.folders))
+                    if _pc is not None
+                    else _local_folders.retired_calls_spec()
+                )
+            if _pc is not None:
+                _folder_facts = _user_pc.shared_folder_facts(_pc.folders)
+            else:
+                _folder_facts = _local_folders.shared_folder_facts(
+                    _folders,
+                    device=(
+                        f'{_local_folders.device_label(_folder_platform)} "{_folder_info.get("name")}"'
+                        if _folder_info.get("name")
+                        else _local_folders.device_label(_folder_platform)
+                    ),
+                )
             if _folder_facts:
                 # sandbox 도구가 기기 경로를 받거나 "없음" 을 돌려줄 때 기기 도구를 가리키는 안내가 읽는다
                 # (stages/s10_tool/second_machine).
@@ -457,10 +551,14 @@ class AgentTurnExecutor:
                 system_prompt = system_prompt + "\n\n" + _env_block
             if _tools_reach_model and kwargs.get("system_prompt") != "":
                 # 왕복 수가 곧 비용이다 — 병렬 호출·일괄 스크립트·출력 최소화 원칙.
+                # 진행 메모까지 사용자 언어로 쓰라는 원칙도 같은 턴에 붙는다.
                 # 사용자가 시스템 프롬프트를 명시적으로 비운 턴에는 붙이지 않는다.
-                from xgen_rsi.base.host._constants import EFFICIENCY_PROMPT_BLOCK
+                from xgen_rsi.base.host._constants import (
+                    EFFICIENCY_PROMPT_BLOCK,
+                    USER_LANGUAGE_PROMPT_BLOCK,
+                )
 
-                system_prompt = system_prompt + EFFICIENCY_PROMPT_BLOCK
+                system_prompt = system_prompt + EFFICIENCY_PROMPT_BLOCK + USER_LANGUAGE_PROMPT_BLOCK
             # ── 자기진화(self-evolution) 판정 ────────────────────────────────
             # ★ 보안: 배포(deploy_)·게스트(guest_)·고정본 실행에서는 절대 허용하지 않는다. 그
             # 실행은 워크플로 OWNER user_id 로 돌아 write-access 검사를 통과하므로,
@@ -727,6 +825,11 @@ class AgentTurnExecutor:
             _result_filter = _tool_result_filter(host)
             if _result_filter is not None and run_tool_context is not None:
                 run_tool_context.result_filter = _result_filter
+            # 이 턴의 모델이 그림을 보는가 — Read 가 이미지를 건넬지 "못 본다" 고 말할지 가른다
+            # (노드 파라미터 → 카탈로그 supports_vision → 공개 모델 계열, 모르면 못 본다).
+            _vision = _model_vision(provider, model, kwargs.get("supports_vision"))
+            if run_tool_context is not None:
+                run_tool_context.metadata[MODEL_VISION_KEY] = _vision
 
             llm_client = None
             cli_cleanup = None
@@ -749,6 +852,7 @@ class AgentTurnExecutor:
                     if _result_filter is not None:
                         # run_tool_context 가 없으면 표면이 제 컨텍스트를 만든다 — 거기에도 싣는다.
                         _tool_surface.tool_context.result_filter = _result_filter
+                    _tool_surface.tool_context.metadata[MODEL_VISION_KEY] = _vision
                     kwargs["_tool_surface"] = _tool_surface
                     # 숨김 목록 — SDK 는 Stage 3 이 붙이는 글을 같은 함수로 만들어 붙인다.
                     _catalog = deferred_catalog_text(registry)
@@ -886,70 +990,134 @@ class AgentTurnExecutor:
                     logger.warning("agents/geny: 요청 파일 첨부 실패 (건너뜀)", exc_info=True)
 
             # ── 컨텍스트 예산 (컨텍스트 자동 압축 토글) ─────────────────
-            # system_prompt 가 최종형이 된 지점 — 여기서 윈도우를 해석하고,
-            # 토글 ON 이면 입력측(text/rag)을 예산 안으로 맞춘 뒤 융합한다.
-            # 이력(preload)은 자르지 않는다: 그건 파이프라인 Stage 2/4 의 몫.
-            # claude_code 는 CLI 가 자체 컨텍스트를 관리하므로 전부 스킵.
+            # system_prompt 가 최종형이 된 지점: 여기서 윈도우를 해석하고, 토글 ON 이면 입력측
+            # (text/rag)을 예산 안으로 맞춘 뒤 융합한다. 이력은 백엔드마다 다르다:
+            #   API 백엔드: 파이프라인 압축(Stage 2/4/6)이 이력을 요약 체크포인트까지 줄이므로
+            #     이력은 그 바닥만큼만 센다(질문을 이력 때문에 자르지 않는다).
+            #   CLI 백엔드(claude_code·codex): 런타임 압축이 없고 이력은 첫 메시지 하나로 접혀
+            #     CLI 의 자체 압축도 못 줄인다. 넘치면 가장 오래된 이력부터 덜어 낸다.
+            from xgen_rsi.base.host.context_budget import (
+                fit_history_context,
+                fit_input_to_budget,
+                memory_reserved_tokens,
+                resolve_window,
+            )
+
             enable_compaction = bool(kwargs.get("enable_compaction", True))
             max_tokens_val = int(kwargs.get("max_tokens", 8192))
-            budget_window = 0
             clamped = False
-            if provider not in _CLI_BACKENDS:
-                from xgen_rsi.base.host.context_budget import (
-                    fit_input_to_budget,
-                    resolve_window,
-                )
+            budget_window = resolve_window(
+                provider,
+                model,
+                int(kwargs.get("context_window") or 0),
+                base_url=base_url,
+                vllm_probe=host.fetch_vllm_max_model_len,
+            )
+            # 메모리 노드가 (최근 메시지, 이전 대화 문자열) 로 보낸 둘째 칸: 최근 N개(기본 2개)보다
+            # 앞선 대화다. 아래 맞춤 뒤에 API 백엔드는 시스템 프롬프트 끝에(옛 agent_xgen 과 같다), CLI
+            # 백엔드는 이번 턴 안내로 붙인다. 노드 기본값이 10만 자라 먼저 창의 일정 몫 안으로 줄이고,
+            # 입력 맞춤이 남는 자리에 맞춰 한 번 더 줄인다(이번 질문·RAG 보다 먼저, 가장 최근 쪽이 남는다).
+            _history_ctx = history_context(kwargs.get("memory"))
+            if _history_ctx:
+                _history_ctx = fit_history_context(_history_ctx, budget_window, provider, model)
+            _late_reserve = 0
+            if memory_provider is not None:
+                # 내장 메모리 주입(Stage 2)은 fit 이후 system 에 붙는다. 그만큼 미리 비워 둔다.
+                # 주입 상한은 build_pipeline 이 같은 창으로 줄인다(memory_inject_cap_chars).
+                from xgen_rsi.base.memory.provider import MemoryHooks, provider_hooks
 
-                budget_window = resolve_window(
-                    provider,
-                    model,
-                    int(kwargs.get("context_window") or 0),
-                    base_url=base_url,
-                    vllm_probe=host.fetch_vllm_max_model_len,
-                )
-                if enable_compaction and budget_window > 0:
-                    fit = fit_input_to_budget(
-                        text=text,
+                _hooks = provider_hooks(memory_provider) or MemoryHooks()
+                _late_reserve = memory_reserved_tokens(budget_window, _hooks.max_inject_chars)
+            # 날짜 줄(Stage 3 DateTimeBlock) 몫.
+            _late_reserve += 200
+            if provider == "claude_code":
+                # CLI 는 자기 도구 스키마를 더하고 답 몫을 따로 잡는다(관측: maxOutputTokens 32,000).
+                _late_reserve += 12_000 + max(0, 32_000 - max_tokens_val)
+            # Stage 3 이 맞춤 뒤에 요청에 붙이는 글: 이번 턴 안내와(SDK 경로) 숨긴 도구 목록. CLI 경로는
+            # 목록을 위에서 이미 시스템 프롬프트에 붙였다.
+            _late_parts = [str(n) for n in (state.shared.get(SharedKeys.TURN_NOTES) or [])]
+            if _tools_reach_model and registry is not None and not _is_cli:
+                try:
+                    from xgen_rsi.base.tools.catalog import deferred_catalog_text
+
+                    _late_parts.append(deferred_catalog_text(registry))
+                except Exception:  # noqa: BLE001 (an estimate input, never a gate)
+                    pass
+            _extra_overhead = "\n\n".join(p for p in _late_parts if p)
+            if enable_compaction and budget_window > 0:
+
+                def _fit(_text: str):
+                    return fit_input_to_budget(
+                        text=_text,
                         rag_block=rag_block,
                         system_prompt=system_prompt,
                         history=state.messages,
-                        registry=registry,
+                        # CLI 도 다리(MCP)가 붙으면 XGEN 도구 스키마가 CLI 창을 쓴다. 같이 센다.
+                        registry=registry if _tools_reach_model else None,
                         provider=provider,
                         model=model,
                         max_tokens=max_tokens_val,
                         window=budget_window,
-                        # 내장 메모리 주입(Stage 2, 최대 10k자≈3k 토큰)은 fit
-                        # 이후 system 에 붙는다 — 예약 없이 꽉 채우면 넘친다.
-                        reserved_tokens=3_000 if memory_provider is not None else 0,
+                        reserved_tokens=_late_reserve,
+                        history_compressible=not _is_cli,
+                        history_context=_history_ctx,
+                        extra_overhead_text=_extra_overhead,
                     )
-                    if fit.clamped:
-                        # A partial snapshot is not a snapshot. If budgeting
-                        # trims any of it, recompute from the original request
-                        # and keep the normal agent loop/witness semantics.
-                        if _fast_path is not None and _fast_path.active:
-                            _fast_path = None
-                            _fast_path_reason = "context_budget"
-                            fit = fit_input_to_budget(
-                                text=_fast_path_original_text,
-                                rag_block=rag_block,
-                                system_prompt=system_prompt,
-                                history=state.messages,
-                                registry=registry,
-                                provider=provider,
-                                model=model,
-                                max_tokens=max_tokens_val,
-                                window=budget_window,
-                                reserved_tokens=(3_000 if memory_provider is not None else 0),
-                            )
-                            logger.info("agents/geny: workspace fast path 폴백 (context_budget)")
-                        text, rag_block, clamped = fit.text, fit.rag_block, fit.clamped
-                        if fit.clamped:
-                            logger.warning(
-                                "agents/geny: 입력 클램프 적용 (window=%d budget=%d before=%d)",
-                                fit.window,
-                                fit.budget,
-                                fit.total_before,
-                            )
+
+                fit = _fit(text)
+                if fit.input_clamped and _fast_path is not None and _fast_path.active:
+                    # A partial snapshot is not a snapshot. If budgeting
+                    # trims any of it, recompute from the original request
+                    # and keep the normal agent loop/witness semantics.
+                    _fast_path = None
+                    _fast_path_reason = "context_budget"
+                    fit = _fit(_fast_path_original_text)
+                    # 스냅숏을 붙인 판이 아니라 원래 요청으로 돌아간다(다시 맞춘 결과가 잘리지 않았어도).
+                    text, rag_block = fit.text, fit.rag_block
+                    logger.info("agents/geny: workspace fast path 폴백 (context_budget)")
+                _history_ctx = fit.history_context
+                if fit.clamped:
+                    # 사용자에게 알리는 것은 사용자 입력(text·rag)이 잘렸을 때뿐이다.
+                    text, rag_block, clamped = fit.text, fit.rag_block, fit.input_clamped
+                    if fit.history is not None:
+                        # CLI: 덜어 낸 이력이 이번 턴의 이력이다. preload 워터마크도 새 길이로 맞춘다.
+                        # 기록 대상에서 빠지는 것은 여전히 "지난 대화" 전부다.
+                        from xgen_rsi.base.host.conversation_archive import (
+                            _ARCHIVED_KEY,
+                            STM_RECORDED_KEY,
+                        )
+
+                        _dropped = len(state.messages) - len(fit.history)
+                        state.messages = list(fit.history)
+                        for _key in (STM_RECORDED_KEY, _ARCHIVED_KEY):
+                            if _key in state.metadata:
+                                state.metadata[_key] = max(0, int(state.metadata[_key]) - _dropped)
+                    logger.warning(
+                        "agents/geny: 입력 클램프 적용 (window=%d budget=%d before=%d)",
+                        fit.window,
+                        fit.budget,
+                        fit.total_before,
+                    )
+
+            if _history_ctx and _is_cli:
+                # CLI: 시스템 프롬프트는 argv(또는 파일)로 가서 매 턴 바뀌면 예열 프로세스를 못 쓴다.
+                # 이번 턴 안내로 요청 사본에 붙인다.
+                _notes = [str(n) for n in (state.shared.get(SharedKeys.TURN_NOTES) or [])]
+                state.shared[SharedKeys.TURN_NOTES] = _notes + [_history_ctx]
+                logger.info(
+                    "agents/geny: 메모리 노드의 이전 대화 %d자를 이번 턴 안내로 붙임",
+                    len(_history_ctx),
+                )
+            elif _history_ctx:
+                # API: 시스템 프롬프트 끝(옛 agent_xgen 과 같은 자리). 한 턴의 여러 호출에서 접두 캐시에
+                # 들어간다(요청 사본의 턴 안내는 매 호출 다시 읽힌다).
+                system_prompt = (
+                    (system_prompt + "\n\n" + _history_ctx) if system_prompt else _history_ctx
+                )
+                logger.info(
+                    "agents/geny: 메모리 노드의 이전 대화 %d자를 시스템 프롬프트에 붙임",
+                    len(_history_ctx),
+                )
 
             if _fast_path is not None and _fast_path.active:
                 register_snapshot_witnesses(state, _fast_path)
@@ -1063,12 +1231,12 @@ class AgentTurnExecutor:
                 tool_context=None if _is_cli else run_tool_context,
                 # run_tool_context 가 없는 턴(내장 도구 없음)에도 Stage 10 에 필터가 실리게.
                 tool_result_filter=None if _is_cli else _result_filter,
-                # 모델의 실제 윈도우 — 압축 임계(80%)·guard·루프 토큰-비 정지의
-                # 공통 기준. 0(미해석)이면 executor 기본값(200k) 유지.
+                # 모델의 실제 윈도우: 압축 문턱(80%)·Stage 4 guard·넘침 복구·도구 결과
+                # 상한의 공통 기준. 0(미해석)이면 executor 기본값(200k) 유지.
                 context_window_budget=budget_window,
-                # claude_code 는 CLI 가 자체 컨텍스트(오토-컴팩션)를 관리한다 —
-                # 파이프라인 층의 압축이 겹치면 같은 전사를 두 주체가 자르게
-                # 되므로 CLI 백엔드에서는 항상 끈다 (파라미터 설명과 일치).
+                # CLI 백엔드(claude_code·codex)는 CLI 가 자체 컨텍스트(자동 압축)를 관리한다.
+                # 파이프라인 층의 압축이 겹치면 같은 전사를 두 주체가 자르게 되므로 항상 끈다.
+                # 첫 메시지에 접히는 지난 대화는 위 예산 단계가 CLI 창에 맞춘다.
                 enable_compaction=(enable_compaction and provider not in _CLI_BACKENDS),
                 credentials=credentials,
                 # 호스트가 캐시 토큰 기록을 갖춘 뒤 명시적으로 켠다 (기본 off).

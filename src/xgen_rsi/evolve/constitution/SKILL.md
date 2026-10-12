@@ -156,9 +156,17 @@ the pattern; prefer editing an existing component over adding a parallel one.
 4. **output_plumbing** (`output.parse`) — the completion-signal detector and
    optional completion markers. Pick when replies are misparsed or completion
    is signalled wrongly.
-5. **context_mgmt** (`context.standard`) — prune threshold, proactive
-   compaction ratio and target, retrieval timeout, the budget guard. Changes
-   here affect every long task — reason about them broadly.
+5. **context_mgmt** (`context.standard`): the cost-prune threshold
+   (`prune_over_tokens`), when compaction starts (`proactive_ratio`) and how
+   far it goes (`target_ratio`), and the memory retrieval timeout. Both ratios
+   are shares of the input budget left after the system prompt, tools, turn
+   context and the request's attachments. They are clamped: `proactive_ratio`
+   to 0.5 to 0.9, `target_ratio` to 0.2 up to `proactive_ratio` minus 0.1; a
+   value that is not a number falls back to the default (0.8 and 0.5). The
+   budget guard and the recovery after a provider rejects a request as too
+   long are fixed by the platform: they cannot be edited or turned off, so do
+   not propose params for them. Changes here affect every long task; reason
+   about them broadly.
 
 ### Structural levers (the objective gives a small novelty bonus to a working, non-regressing structural lever that clears the floor)
 

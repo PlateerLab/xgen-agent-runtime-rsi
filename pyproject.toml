@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime-rsi"
-version = "0.10.0"
+version = "0.11.0"
 description = "XGEN RSI harness — a swap-in agent harness that evolves itself with RRSI (regularized harness evolution) and Dream-RSI (replay-based exploration policy improvement)"
 readme = "README.md"
 license = "Apache-2.0"
@@ -21,7 +21,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 # geny-rsi 는 독립 패키지다 — xgen-agent-runtime 을 의존하지 않는다. 바탕 런타임(공급자 계층·도구·기억·호스트 계약)은
-# xgen-agent-runtime 4.81.0 을 복사한 ``xgen_rsi.base`` 이고, 아래는 그 사본이 쓰는 외부 라이브러리다.
+# xgen-agent-runtime 4.89.0 을 복사한 ``xgen_rsi.base`` 이고, 아래는 그 사본이 쓰는 외부 라이브러리다.
 # 하한만 둔다 — 소비자(xgen-workflow)가 requirements.lock 으로 정확히 고정하고, 같은 환경의 다른 패키지와 겹쳐도 갈리지 않게.
 dependencies = [
     "anthropic[bedrock]>=0.125.0",
@@ -41,9 +41,9 @@ dependencies = [
     "psycopg[binary]>=3.3.6",
     "pgvector>=0.5.0",
     "qdrant-client>=1.16.0",
-    "asyncssh>=2.23.1",
+    "asyncssh>=2.24.1",
     # 문서 읽기(ParseDocument). doc2chunk 는 xgen-pdf 를 이름으로만 요구하고 xgen-pdf 는 어느 인덱스에도 없어 URL 로 적는다.
-    "xgen-doc2chunk>=0.4.2",
+    "xgen-doc2chunk>=0.5.0",
     "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl",
 ]
 
@@ -79,7 +79,7 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-# xgen_rsi/base 는 xgen-agent-runtime 4.81.0 사본이다 — 원본과 비교해 갱신하기 쉽게 모듈 경로 말고는 손대지 않는다.
+# xgen_rsi/base 는 xgen-agent-runtime 4.89.0 사본이다. 원본과 비교해 갱신하기 쉽게 모듈 경로 말고는 손대지 않는다.
 extend-exclude = ["src/xgen_rsi/base"]
 
 [tool.ruff.lint]

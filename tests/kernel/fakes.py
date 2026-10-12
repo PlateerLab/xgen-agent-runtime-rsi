@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
+from xgen_rsi.base.core.errors import APIError, ErrorCategory
 from xgen_rsi.base.core.state import TokenUsage
 from xgen_rsi.base.llm_client.base import BaseClient, ClientCapabilities
 from xgen_rsi.base.llm_client.types import APIResponse, ContentBlock
@@ -174,9 +175,15 @@ class ScriptedClient(BaseClient):
         idx = min(len(self.requests) - 1, len(self.script) - 1)
         return self.script[idx]
 
-    def _response(self, step: Dict[str, Any]) -> APIResponse:
+    @staticmethod
+    def _fail(step: Dict[str, Any]) -> None:
+        if step.get("overflow"):
+            raise APIError(step["overflow"], category=ErrorCategory.TOKEN_LIMIT, status_code=400)
         if step.get("raise"):
             raise RuntimeError(step["raise"])
+
+    def _response(self, step: Dict[str, Any]) -> APIResponse:
+        self._fail(step)
         content: List[ContentBlock] = []
         if step["text"]:
             content.append(ContentBlock(type="text", text=step["text"]))
@@ -201,8 +208,7 @@ class ScriptedClient(BaseClient):
         )
         self.purposes.append(str(kwargs.get("purpose") or ""))
         step = self._next()
-        if step.get("raise"):
-            raise RuntimeError(step["raise"])
+        self._fail(step)
         text = step["text"]
         if text:
             half = max(1, len(text) // 2)
@@ -217,6 +223,18 @@ class ScriptedClient(BaseClient):
 def error_step(message: str) -> Dict[str, Any]:
     """이 호출에서 공급자 오류를 낸다(턴이 오류로 끝나는 경로)."""
     return {"raise": message, "text": "", "tools": [], "usage": (0, 0)}
+
+
+def overflow_step(message: str = "prompt is too long") -> Dict[str, Any]:
+    """이 호출을 공급자가 창 넘침으로 거절한다(``TOKEN_LIMIT``, 400). 문구에 수가 있으면 넘침 복구가 읽는다."""
+    return {"overflow": message, "text": "", "tools": [], "usage": (0, 0)}
+
+
+class ScriptedCLIClient(ScriptedClient):
+    """루프를 소유하는 CLI 백엔드처럼 보이는 각본 클라이언트(스트림 전용, 호스트의 ``build_cli_runtime`` 이 준다)."""
+
+    provider = "claude_code_cli"
+    capabilities = ClientCapabilities(is_subprocess=True, supports_tools=True, streaming_granularity="message")
 
 
 def tool_context_factory(**k: Any) -> Any:

@@ -21,12 +21,35 @@ def is_replay(provider: Any) -> bool:
     return provider is not None and getattr(type(provider), "rsi_replay", False) is True
 
 
+def _retrieval_hooks(rt: Any) -> Any:
+    """검색기가 쓸 기억 hooks: 저장소에 붙은 hooks(``set_hooks``), 주입 상한은 창의 10% 로 묶는다.
+
+    런타임 4.88~4.89 의 ``build_pipeline`` 과 같다. provider 의 hooks 는 그대로 두고 이 턴의 검색기만 줄인 판을
+    받는다. 창을 모르면(0) 상한을 줄이지 않는다.
+    """
+    from xgen_rsi.base.memory.provider import MemoryHooks, provider_hooks
+
+    hooks = provider_hooks(rt.memory_provider)
+    window = int(rt.plan.pipeline_kwargs.get("context_window_budget") or 0)
+    if window > 0:
+        import dataclasses
+
+        from xgen_rsi.base.host.context_budget import memory_inject_cap_chars
+
+        base_hooks = hooks or MemoryHooks()
+        cap = memory_inject_cap_chars(window, base_hooks.max_inject_chars)
+        if cap < base_hooks.max_inject_chars:
+            hooks = dataclasses.replace(base_hooks, max_inject_chars=cap)
+    return hooks
+
+
 class ArchiveMemoryComponent(Component):
     """Memory policy (the memory *contents* are user data and never part of the harness).
 
     ``retrieve``: provide the retriever that injects pinned facts and relevant knowledge at the first
-    iteration (used by the context component). ``archive``: at the end of each slice, write the
-    short-term record and update the conversation rollup.
+    iteration (used by the context component). It uses the memory store's own retrieval settings,
+    with the injection capped at 10% of the context window. ``archive``: at the end of each slice,
+    write the short-term record and update the conversation rollup.
 
     Params: retrieve (bool, True), archive (bool, True).
     """
@@ -45,7 +68,7 @@ class ArchiveMemoryComponent(Component):
         if self._retriever is None:
             from xgen_rsi.base.memory.retriever import MemoryAwareRetriever
 
-            self._retriever = MemoryAwareRetriever(rt.memory_provider)
+            self._retriever = MemoryAwareRetriever(rt.memory_provider, hooks=_retrieval_hooks(rt))
         return self._retriever
 
     async def on_slice_end(self, rt: Any) -> None:

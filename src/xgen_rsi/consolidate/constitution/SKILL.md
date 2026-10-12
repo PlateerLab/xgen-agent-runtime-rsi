@@ -128,8 +128,9 @@ reads. Prefer the smallest move that fixes the pattern.
    Pick when the model does not know WHEN, in what order or under what condition
    to act, or keeps answering in a form these users reject.
 3. **output_plumbing** — the completion-signal detector and markers.
-4. **context_mgmt** — prune threshold, compaction ratio and target, retrieval
-   timeout, budget guard.
+4. **context_mgmt**: prune threshold, compaction ratio (clamped to 0.5 to 0.9)
+   and target (clamped to 0.2 up to the ratio minus 0.1), retrieval timeout.
+   The budget guard and the provider-overflow recovery are fixed, not levers.
 5. **config** — request-shaping knobs.
 6. **skill** (structural) — a `SkillLibraryComponent` with
    `skills/<name>/SKILL.md` files for a recurring wrong-method mode; concrete,

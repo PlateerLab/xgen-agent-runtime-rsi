@@ -142,7 +142,7 @@ if res.adopted:
     {"id": "prompt.system", "kind": "prompt", "impl": "xgen_rsi.components.prompt:SystemPromptComponent",
      "params": {"part_overrides": {}, "extra_blocks": [], "part_order": [], "datetime": true}},
     {"id": "context.standard", "kind": "context_mgmt", "impl": "xgen_rsi.components.context:StandardContextComponent",
-     "params": {"prune_over_tokens": 30000, "proactive_ratio": 0.8, "target_ratio": 0.7}},
+     "params": {"prune_over_tokens": 30000, "proactive_ratio": 0.8, "target_ratio": 0.5}},
     {"id": "skill.library", "kind": "skill", "impl": "xgen_rsi.components.skills:SkillLibraryComponent",
      "files": ["skills/csv-check/SKILL.md"]}
   ]
@@ -152,7 +152,7 @@ if res.adopted:
 - **편집 주소** `<component_id>.params.<key>` · `<component_id>.files.<path>` — 원자 편집의 대상. 편집이 건드린 주소의 구성요소 kind 가 RRSI 의 태그 ℓ 이다(정규식 추측이 아니라 선언 대조).
 - **버전** = manifest 정규형 + 참조 파일 내용의 sha256. 같은 내용이면 같은 버전.
 - **잠금** — 정책 π·커널 한도는 하네스가 바꿀 수 없다(RRSI 헌법 hard rule 5 의 구조화).
-- **H0** = 기존 운영 경로(런타임 4.75)의 동작을 구성요소로 옮긴 시작 하네스. RRSI 는 H0 대비로 모든 것을 잰다.
+- **H0** = 기존 운영 경로(런타임 4.89)의 동작을 구성요소로 옮긴 시작 하네스. RRSI 는 H0 대비로 모든 것을 잰다.
 - **구조 레버(𝒦_str)**: `skill`(SKILL.md 카탈로그 + `ReadSkill` 점진 공개), `client_tool`(노출·실행 정책), `memory`(기억 정책).
 - `rsi harness show [DIR]` · `rsi harness validate [DIR]` · `rsi harness diff A B`.
 
@@ -247,7 +247,7 @@ xgen-agent-runtime 의 코드를 그대로 복사해 쓰고(`xgen_rsi.base`), �
 `tests/test_base_copy.py` 가 사본이 그 기록과 같은지 본다 — 사본을 손으로 고치면 실패한다.
 
 ```bash
-python tools/sync_base.py /path/to/xgen-agent-runtime/src/xgen_agent_runtime 4.81.0   # 새 버전으로 복사 + COPY.json
+python tools/sync_base.py /path/to/xgen-agent-runtime/src/xgen_agent_runtime 4.89.0   # 새 버전으로 복사 + COPY.json
 python tools/sync_base.py --check                                                      # 사본이 기록과 같은가
 ```
 

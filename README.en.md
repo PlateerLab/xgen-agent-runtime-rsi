@@ -54,7 +54,7 @@ in one [**comparison report (Korean)**](docs/reports/geny-vs-geny-rsi.md).
 | Runtime · package | geny · xgen-agent-runtime | geny-rsi · xgen-agent-runtime-rsi. **Neither imports nor depends on the other** |
 | Entry point | `AgentTurnExecutor().run(host, **kwargs)` | `GenyRSITurnExecutor().run(host, **kwargs)` — the same contract |
 | Ports, settings, credentials, model | the same | the same |
-| Memory, tasks, tools, apps, storage, evolution history | runtime's element layer | **the same code** — runtime 4.81.0 copied as `xgen_rsi.base` (file hashes in `COPY.json`, checked by tests) |
+| Memory, tasks, tools, apps, storage, evolution history | runtime's element layer | **the same code**: runtime 4.89.0 copied as `xgen_rsi.base` (file hashes in `COPY.json`, checked by tests) |
 | **Harness pipeline** | the 21-stage engine. People measure it and change it by release | fixed kernel K₀ + harness H. **Starts from H0 and is evolved by RRSI from that agent's use** (each agent has its own harness) |
 | Exploration policy | none | π_E, evolved by **Dream-RSI** (used in exploration with a verifier) |
 
@@ -299,7 +299,7 @@ Not held: keys, credentials, client objects, and what the harness built (candida
 
 ### 1. Geny base — the elements stay the same
 
-geny-rsi copies runtime 4.81.0 as `xgen_rsi.base`. 517 of its 519 files are byte-identical; the other 2 (version stamp, a docstring path) are listed
+geny-rsi copies runtime 4.89.0 as `xgen_rsi.base`. 520 of its 522 files are byte-identical; the other 2 (version stamp, a docstring path) are listed
 with reasons in `tools/sync_base.py`. The provider layer (15: anthropic, openai, google, vllm, bedrock, vertex, azure, ollama, claude_code_cli,
 codex_cli …), tools, memory, tasks, apps, storage, self-evolution, the host contract and the 21-stage baseline engine all come from this copy. Turn
 assembly (the 26-step host contract) is also a copy with the same behaviour as the runtime (`xgen_rsi.assembly`). When the runtime changes, the copy
@@ -467,7 +467,7 @@ RRSI judgement once more**.
 
 ```
 host ──GenyRSITurnExecutor().run(host, **kwargs)──► xgen_rsi.assembly (turn assembly — a copy with the runtime's behaviour) ──► kernel
-       (Agent Geny uses AgentTurnExecutor — same contract)  providers, tools, memory, tasks, apps, storage: the copy xgen_rsi.base (4.81.0)  │
+       (Agent Geny uses AgentTurnExecutor, same contract)  providers, tools, memory, tasks, apps, storage: the copy xgen_rsi.base (4.89.0)  │
  ┌──────────────────────── K₀ kernel (fixed) ──────────────────────────────────────────────────────────────────────────▼──┐
  │ engine     context → prompt → client_tool → guard → config → call → parse → tools → control (one decision point)        │
  │ model_call request assembly, streaming, retries (base provider layer) · ledger every policy call and c(τ) · tools perms │
@@ -526,7 +526,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest -q        # tests (no real model calls)
 .venv/bin/python -m mypy             # rsi_math strict
 .venv/bin/ruff check src tests tools experiments
-.venv/bin/python tools/sync_base.py --check   # xgen_rsi.base is still an exact copy of runtime 4.81.0
+.venv/bin/python tools/sync_base.py --check   # xgen_rsi.base is still an exact copy of runtime 4.89.0
 ```
 
 ## Documents
@@ -564,7 +564,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 }
 ```
 
-- PlateerLab, *xgen-agent-runtime* — geny (the 21-stage harness), the multi-provider layer and the host contract. Version 4.81.0 is copied as `xgen_rsi.base` (Apache-2.0)
+- PlateerLab, *xgen-agent-runtime*: geny (the 21-stage harness), the multi-provider layer and the host contract. Version 4.89.0 is copied as `xgen_rsi.base` (Apache-2.0)
 
 ## License
 

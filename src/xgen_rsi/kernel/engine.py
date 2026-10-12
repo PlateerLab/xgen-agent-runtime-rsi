@@ -7,7 +7,8 @@
     client_tool           이번 호출의 도구 표면
     context.ensure_fits   예산 가드(압축 후 1회 재검사)
     config.apply_request  요청 모양 노브(프롬프트 캐시 표시 등)
-    gateway.call          정책 호출(원장 기록, 스트림 사건)
+    gateway.call          정책 호출(원장 기록, 스트림 사건). 공급자가 창 넘침으로 거절하면 context 구성요소의
+                          ``recover_overflow``(있으면)로 줄이고 한 번 다시 보낸다
     output.parse          글·도구 호출·완료 신호
     tools.run             도구 실행(커널 — 권한·거부·반복 차단)
     control.decide        계속/완료/중단 — 유일한 결정 자리
@@ -19,9 +20,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from xgen_rsi.base.core.run_status import RunStatus, TerminationReason
+from xgen_rsi.harness.kinds import OverflowRecovery
 from xgen_rsi.harness.runtime import TurnRuntime
 from xgen_rsi.kernel.model_call import ModelCaller
 from xgen_rsi.kernel.recorder import TrajectoryRecorder
@@ -60,6 +62,15 @@ class TurnEngine:
         self.memory = h.maybe("memory")
         self.configs = h.all("config")
         self._pricing: Any = None
+        #: 넘침 복구 훅. context 구성요소가 선택 프로토콜(:class:`OverflowRecovery`)을 갖출 때만.
+        self._recover: Optional[Callable[[Any], Awaitable[bool]]] = None
+        if isinstance(self.context, OverflowRecovery):
+            context = self.context
+
+            async def _recover(error: Any) -> bool:
+                return bool(await context.recover_overflow(rt, error))
+
+            self._recover = _recover
 
     # ── 입력 ────────────────────────────────────────────────────────────
     def _accept_input(self, pipeline_input: Any, continuation: bool) -> None:
@@ -161,7 +172,9 @@ class TurnEngine:
 
             calls_before = rt.ledger.model_calls()
             tokens_before = rt.ledger.policy_tokens()
-            response = await self.caller.call(state, rt.model_config, purpose="main")
+            response = await self.caller.call(
+                state, rt.model_config, purpose="main", recover=self._recover
+            )
             state.last_api_response = response
             state.add_message("assistant", assistant_content_blocks(response))
             self._track_usage(response)
