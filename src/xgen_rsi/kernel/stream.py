@@ -213,6 +213,7 @@ class TurnDriver:
             provider=provider,
             turn_cost_usd=float(getattr(state, "total_cost_usd", 0.0) or 0.0),
             harness=harness_summary(state),
+            last_raw=getattr(last, "raw", None),
         )
 
     async def _slice_task(self, pipeline_input: Any, continuation: bool) -> None:

@@ -2,6 +2,18 @@
 
 geny-rsi(`xgen-agent-runtime-rsi`)의 변경 기록. 0.11.0 부터 적는다. 그 전 판의 내용은 git 기록과 [README](README.md) 의 구현 상태 표에 있다.
 
+## [0.12.0] - 2026-10-13
+
+### Changed: 바탕 런타임을 xgen-agent-runtime 4.90.0 으로 (CLI 구독 한도)
+
+- **사본** (`xgen_rsi.base`, `tools/sync_base.py`): 523개 파일(새 파일 `llm_client/_cli_limits.py`), 기록된 수정 3건 그대로.
+  4.90.0 의 변경이 그대로 온다: Claude CLI 의 `rate_limit_event` 를 창별로 모아 `APIResponse.raw["rate_limits"]` 에 싣고,
+  구독 · 지출 한도 소진은 `ErrorCategory.CLI_RATE_LIMITED`(재시도 대상 아님) + `APIError.details`(`reset_at` · `rate_limits` · `kind`).
+- **커널** (`kernel/model_call.py`): `api.error` 사건에 `details` 를 싣는다(runtime Stage 6 와 같다). 재시도 판단은
+  `should_retry(category)` 그대로라 `CLI_RATE_LIMITED` 는 같은 계정으로 다시 보내지 않는다.
+- **usage** (`kernel/ledger.py`, `kernel/stream.py`): 마지막 응답의 `cli_version` 과 `rate_limits` 를 runtime 4.90.0 의
+  `turn_usage` 와 같이 싣는다(있을 때만). 호스트(xgen-workflow)가 계정별 한도 상태와 파드별 CLI 버전을 원장에 남긴다.
+
 ## [0.11.0] - 2026-10-12
 
 ### Changed: 바탕 런타임을 xgen-agent-runtime 4.89.0 으로 (압축 정책 포함)

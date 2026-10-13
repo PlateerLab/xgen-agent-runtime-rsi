@@ -202,6 +202,9 @@ class ModelCaller:
             cli_version = getattr(self.client, "_cli_version_value", None)
             if cli_version:
                 payload["cli_version"] = str(cli_version)
+            # 구독 한도 소진(CLI_RATE_LIMITED, 런타임 4.90.0)이면 초기화 시각·창별 상태가 실린다.
+            if getattr(e, "details", None):
+                payload["details"] = dict(e.details)
             state.add_event("api.error", payload)
             raise
         # 공급자가 센 이 요청의 크기가 이 턴의 다음 크기 판단의 기준점이다(core.token_estimate). 명시한 재료로
