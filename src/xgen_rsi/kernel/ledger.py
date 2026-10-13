@@ -168,8 +168,13 @@ class UsageLedger:
         provider: str,
         turn_cost_usd: float,
         harness: Optional[Dict[str, Any]],
+        last_raw: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """기존 ``runner.turn_usage`` 와 같은 모양·같은 의미의 usage 페이로드. 외부 호출이 0회면 None."""
+        """기존 ``runner.turn_usage`` 와 같은 모양·같은 의미의 usage 페이로드. 외부 호출이 0회면 None.
+
+        ``last_raw`` 는 마지막 응답의 ``raw``. CLI 백엔드면 ``cli_version`` 과 구독 한도 신호 ``rate_limits``
+        를 runtime 4.90.0 의 turn_usage 와 같이 싣는다(있을 때만).
+        """
         from xgen_rsi.base.core.state import TokenUsage
 
         calls = [u for u in self.external_usages if isinstance(u, TokenUsage)]
@@ -209,6 +214,11 @@ class UsageLedger:
         if auxiliary is not None:
             # 기존 runtime ``turn_usage`` 의 ``auxiliary`` 와 같은 모양(4.87.0). 최상위 값은 그대로 메인 루프만이다.
             usage["auxiliary"] = auxiliary
+        if isinstance(last_raw, dict):
+            if last_raw.get("cli_version"):
+                usage["cli_version"] = str(last_raw["cli_version"])
+            if isinstance(last_raw.get("rate_limits"), dict) and last_raw["rate_limits"]:
+                usage["rate_limits"] = last_raw["rate_limits"]
         return usage
 
 

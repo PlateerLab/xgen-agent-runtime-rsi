@@ -13,7 +13,7 @@
 
 from typing import Any
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 __all__ = ["GenyRSI", "GenyRSITurnExecutor", "LocalHost", "RunResult", "__version__"]
 

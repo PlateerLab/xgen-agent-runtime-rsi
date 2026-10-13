@@ -247,7 +247,7 @@ xgen-agent-runtime 의 코드를 그대로 복사해 쓰고(`xgen_rsi.base`), �
 `tests/test_base_copy.py` 가 사본이 그 기록과 같은지 본다 — 사본을 손으로 고치면 실패한다.
 
 ```bash
-python tools/sync_base.py /path/to/xgen-agent-runtime/src/xgen_agent_runtime 4.89.0   # 새 버전으로 복사 + COPY.json
+python tools/sync_base.py /path/to/xgen-agent-runtime/src/xgen_agent_runtime 4.90.0   # 새 버전으로 복사 + COPY.json
 python tools/sync_base.py --check                                                      # 사본이 기록과 같은가
 ```
 

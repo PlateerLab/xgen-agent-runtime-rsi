@@ -3,7 +3,7 @@
 기존 21-stage 하네스(`xgen-agent-runtime` 4.75.0)를 **입력·출력 인터페이스만 유지한 채** 기존 방법론 + RRSI + Dream-RSI 를 융합한 새 하네스 프레임워크로 다시 짓기 위한 조사와 계획이다. 작성일 2026-10-01.
 
 > **이 문서 모음은 2026-10-01 설계 시점의 기록이다.** 그 뒤 구현에서 바뀐 것: geny-rsi 는 xgen-agent-runtime 을 라이브러리로 import 하지 않고
-> 4.89.0 을 `xgen_rsi.base` 로 복사해 쓴다(완전 독립, 0.3.0 부터). 지금의 구조·적용 상태·실측은 [README](../README.md)와
+> 4.90.0 을 `xgen_rsi.base` 로 복사해 쓴다(완전 독립, 0.3.0 부터). 지금의 구조·적용 상태·실측은 [README](../README.md)와
 > [비교 보고서](reports/geny-vs-geny-rsi.md), 구현 현황은 [PLAN](PLAN.md) §4.
 
 원문: RRSI [arXiv:2609.24972](https://arxiv.org/abs/2609.24972) (v2, 코드 `google-research/rrsi` Apache-2.0), Dream-RSI [arXiv:2609.14858](https://arxiv.org/abs/2609.14858) (v1, 코드 미공개). 논문 PDF 는 라이선스상 이 저장소에 포함하지 않는다. arXiv 에서 받는다.
