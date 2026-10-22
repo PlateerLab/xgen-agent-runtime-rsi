@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xgen-agent-runtime-rsi"
-version = "0.12.0"
+version = "0.12.1"
 description = "XGEN RSI harness — a swap-in agent harness that evolves itself with RRSI (regularized harness evolution) and Dream-RSI (replay-based exploration policy improvement)"
 readme = "README.md"
 license = "Apache-2.0"
@@ -29,7 +29,7 @@ dependencies = [
     "pydantic>=2.12.5",
     "jsonschema>=4.26.0",
     "httpx>=0.28.1",
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
     "websockets>=16.1.1",
     "pyyaml>=6.0.2",
     "numpy>=2.3.2",
@@ -43,8 +43,8 @@ dependencies = [
     "qdrant-client>=1.16.0",
     "asyncssh>=2.24.1",
     # 문서 읽기(ParseDocument). doc2chunk 는 xgen-pdf 를 이름으로만 요구하고 xgen-pdf 는 어느 인덱스에도 없어 URL 로 적는다.
-    "xgen-doc2chunk>=0.5.0",
-    "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.2/xgen_pdf-0.1.2-py3-none-any.whl",
+    "xgen-doc2chunk>=0.5.1",
+    "xgen-pdf @ https://github.com/PlateerLab/xgen-pdf/releases/download/v0.1.3/xgen_pdf-0.1.3-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
